@@ -1,0 +1,16 @@
+[Unit]
+Description=Nobingo Queue Worker Daemon
+After=network.target redis-server.service mysql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+Restart=always
+RestartSec=3
+ExecStart=/usr/bin/php /var/www/nobingo/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600 --timeout=120
+StandardOutput=append:/var/log/nobingo/worker.log
+StandardError=append:/var/log/nobingo/worker-error.log
+
+[Install]
+WantedBy=multi-user.target

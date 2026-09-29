@@ -4,11 +4,16 @@ namespace App\Http\Controllers\Company;
 
 use App\Domains\Cards\Models\BingoCard;
 use App\Domains\Games\Models\Game;
+use App\Domains\Games\Models\GameCard;
 use App\Domains\Games\Models\GameTemplate;
+use App\Domains\Games\Services\CardAssignmentService;
 use App\Domains\Games\Services\GameLifecycleService;
 use App\Domains\Games\Services\NumberCallingService;
 use App\Domains\Tenancy\Models\Company;
+use App\Domains\Winners\Models\GameWinner;
+use App\Domains\Winners\Services\BingoVerificationService;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -19,7 +24,8 @@ class GameManagementController extends Controller
 {
     public function __construct(
         protected GameLifecycleService $lifecycleService,
-        protected NumberCallingService $callingService
+        protected NumberCallingService $callingService,
+        protected BingoVerificationService $verificationService
     ) {}
 
     /**
@@ -122,15 +128,35 @@ class GameManagementController extends Controller
             'template',
             'creator',
             'players.user',
+            'players.assignedCard.card',
+            'players.assignedCard.version',
             'cards.card',
             'cards.version',
+            'cards.user',
             'calls',
             'lastCall',
+            'winners.user',
+            'winners.card.card',
+            'winners.card.version',
+            'winners.card.user',
+            'winners.pattern',
         ]);
 
         $availableCardsCount = BingoCard::where('company_id', $company->id)
             ->where('status', BingoCard::STATUS_AVAILABLE)
             ->count();
+
+        $availableCardNumbers = BingoCard::where('company_id', $company->id)
+            ->where('status', BingoCard::STATUS_AVAILABLE)
+            ->limit(50)
+            ->pluck('card_number')
+            ->toArray();
+
+        $companyPlayers = User::where('company_id', $company->id)
+            ->where('status', 'active')
+            ->select(['id', 'name', 'email'])
+            ->orderBy('name')
+            ->get();
 
         $masterBoard = $this->callingService->getMasterBoard($game);
         $remainingCount = count($this->callingService->getRemainingNumbers($game));
@@ -138,6 +164,8 @@ class GameManagementController extends Controller
         return Inertia::render('Company/Games/Show', [
             'game' => $game,
             'available_cards_count' => $availableCardsCount,
+            'available_card_numbers' => $availableCardNumbers,
+            'company_players' => $companyPlayers,
             'master_board' => $masterBoard,
             'remaining_count' => $remainingCount,
         ]);
@@ -210,8 +238,230 @@ class GameManagementController extends Controller
             ])],
         ]);
 
+        if ($game->status === $validated['status']) {
+            return redirect()->back()->with('info', "Game is already in status {$validated['status']}.");
+        }
+
+        if (in_array($validated['status'], [Game::STATUS_OPEN, Game::STATUS_STARTING, Game::STATUS_ACTIVE], true)) {
+            if (! $company->hasSufficientCredit()) {
+                return redirect()->back()
+                    ->with('error', 'Insufficient platform credit. Company credit balance is $0.00. You must purchase platform credit before activating or starting games.')
+                    ->withErrors([
+                        'credit' => 'Company credit balance is $0.00. You must purchase platform credit before activating or starting games.',
+                    ]);
+            }
+        }
+
         $this->lifecycleService->transitionTo($game, $validated['status']);
 
         return redirect()->back()->with('success', "Game transitioned to status {$validated['status']}.");
+    }
+
+    /**
+     * Assign or reassign a specific card number to a player or walk-in guest in this game room.
+     */
+    public function assignCard(Company $company, Game $game, Request $request): RedirectResponse|JsonResponse
+    {
+        if ($game->company_id !== $company->id) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'is_walkin' => ['sometimes', 'boolean'],
+            'user_id' => ['nullable', 'required_without:is_walkin', 'exists:users,id'],
+            'card_number' => ['required', 'integer', 'min:1'],
+            'guest_identifier' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        try {
+            $assignmentService = app(CardAssignmentService::class);
+
+            if ($request->boolean('is_walkin')) {
+                $gameCard = $assignmentService->assignWalkInCard(
+                    $game,
+                    (int) $validated['card_number'],
+                    $validated['guest_identifier'] ?? null
+                );
+                $cardNumberFormatted = sprintf('#%06d', $validated['card_number']);
+                $displayName = $gameCard->playerDisplayName();
+                $message = "Card {$cardNumberFormatted} successfully assigned to cash walk-in player ({$displayName}).";
+            } else {
+                $user = User::findOrFail($validated['user_id']);
+                $gameCard = $assignmentService->assignSpecificCardToPlayer(
+                    $game,
+                    $user,
+                    (int) $validated['card_number']
+                );
+                $cardNumberFormatted = sprintf('#%06d', $validated['card_number']);
+                $message = "Card {$cardNumberFormatted} successfully assigned to {$user->name}.";
+            }
+
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => $message,
+                    'game_card' => $gameCard,
+                ]);
+            }
+
+            return redirect()->back()->with('success', $message);
+        } catch (\Throwable $e) {
+            if ($request->wantsJson()) {
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
+
+            return redirect()->back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Confirm and approve a winning claim, release payout, and complete game.
+     */
+    public function confirmClaim(Company $company, Game $game, GameWinner $winner): RedirectResponse|JsonResponse
+    {
+        if ($game->company_id !== $company->id || $winner->game_id !== $game->id) {
+            abort(404);
+        }
+
+        try {
+            $result = $this->verificationService->confirmWinnerClaim($game, $winner);
+
+            if (request()->wantsJson()) {
+                return response()->json($result);
+            }
+
+            return redirect()->back()->with('success', $result['message']);
+        } catch (\Throwable $e) {
+            if (request()->wantsJson()) {
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
+
+            return redirect()->back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Reject a false claim, allowing host to resume the game session.
+     */
+    public function rejectClaim(Company $company, Game $game, GameWinner $winner, Request $request): RedirectResponse|JsonResponse
+    {
+        if ($game->company_id !== $company->id || $winner->game_id !== $game->id) {
+            abort(404);
+        }
+
+        $reason = $request->input('reason', 'Host verified that card does not meet winning pattern requirements.');
+
+        try {
+            $result = $this->verificationService->rejectWinnerClaim($game, $winner, $reason);
+
+            if ($request->wantsJson()) {
+                return response()->json($result);
+            }
+
+            return redirect()->back()->with('success', $result['message']);
+        } catch (\Throwable $e) {
+            if ($request->wantsJson()) {
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
+
+            return redirect()->back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Inspect and verify any card number (including walk-ins) with marked cells and completed patterns.
+     */
+    public function verifyCard(Company $company, Game $game, Request $request): JsonResponse
+    {
+        if ($game->company_id !== $company->id) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'card_number' => ['nullable', 'integer'],
+            'game_card_id' => ['nullable', 'integer'],
+        ]);
+
+        $gameCardQuery = GameCard::where('game_id', $game->id)->with(['version', 'card', 'user']);
+
+        if (! empty($validated['game_card_id'])) {
+            $gameCard = $gameCardQuery->where('id', $validated['game_card_id'])->first();
+        } elseif (! empty($validated['card_number'])) {
+            $gameCard = $gameCardQuery->whereHas('card', function ($q) use ($validated) {
+                $q->where('card_number', $validated['card_number']);
+            })->first();
+        } else {
+            return response()->json(['error' => 'Must provide card_number or game_card_id.'], 422);
+        }
+
+        if (! $gameCard) {
+            return response()->json(['error' => 'Card is not assigned in this game.'], 404);
+        }
+
+        $latestCall = $game->lastCall;
+        $eval = $this->verificationService->verifyCard($game, $gameCard, $latestCall?->sequence_index);
+
+        return response()->json([
+            'is_valid' => $eval['is_valid'],
+            'completed_count' => $eval['completed_count'],
+            'required_count' => $eval['required_count'],
+            'completed_patterns' => $eval['completed_patterns'],
+            'completed_slugs' => $eval['completed_slugs'],
+            'grid' => $gameCard->version?->grid,
+            'marked_grid' => $eval['marked_grid'],
+            'reason' => $eval['reason'],
+            'card_number' => $gameCard->card?->card_number,
+            'game_card_id' => $gameCard->id,
+            'player_name' => $gameCard->playerDisplayName(),
+            'is_walkin' => $gameCard->isWalkIn(),
+            'estimated_payout' => $this->verificationService->calculatePrize($game, 1),
+        ]);
+    }
+
+    /**
+     * Declare a walk-in player as winner and finalize game.
+     */
+    public function declareWalkInWinner(Company $company, Game $game, Request $request): RedirectResponse|JsonResponse
+    {
+        if ($game->company_id !== $company->id) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'game_card_id' => ['nullable', 'integer'],
+            'card_number' => ['nullable', 'integer'],
+        ]);
+
+        $gameCardQuery = GameCard::where('game_id', $game->id)->with(['version', 'card']);
+
+        if (! empty($validated['game_card_id'])) {
+            $gameCard = $gameCardQuery->where('id', $validated['game_card_id'])->first();
+        } elseif (! empty($validated['card_number'])) {
+            $gameCard = $gameCardQuery->whereHas('card', function ($q) use ($validated) {
+                $q->where('card_number', $validated['card_number']);
+            })->first();
+        } else {
+            return response()->json(['error' => 'Must provide card_number or game_card_id.'], 422);
+        }
+
+        if (! $gameCard) {
+            return response()->json(['error' => 'Card is not assigned in this game.'], 404);
+        }
+
+        try {
+            $result = $this->verificationService->declareWalkInWinner($game, $gameCard);
+
+            if ($request->wantsJson()) {
+                return response()->json($result);
+            }
+
+            return redirect()->back()->with('success', $result['message']);
+        } catch (\Throwable $e) {
+            if ($request->wantsJson()) {
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
+
+            return redirect()->back()->with('error', $e->getMessage());
+        }
     }
 }

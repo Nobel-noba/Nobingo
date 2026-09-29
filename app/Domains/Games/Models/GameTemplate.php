@@ -90,4 +90,19 @@ class GameTemplate extends Model
             }
         })->where('is_active', true);
     }
+
+    /**
+     * Scope to templates belonging to or global for a company (all statuses for admin management).
+     *
+     * @param  Builder<$this>  $query
+     */
+    public function scopeForCompany(Builder $query, ?int $companyId = null): Builder
+    {
+        return $query->where(function ($q) use ($companyId) {
+            $q->whereNull('company_id');
+            if ($companyId !== null) {
+                $q->orWhere('company_id', $companyId);
+            }
+        });
+    }
 }

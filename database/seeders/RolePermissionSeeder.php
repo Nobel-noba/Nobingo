@@ -112,6 +112,7 @@ class RolePermissionSeeder extends Seeder
             [
                 'name' => 'Acme Bingo Club',
                 'status' => 'active',
+                'credit_balance' => 100000,
                 'settings' => [
                     'brand_color' => '#4f46e5',
                     'tagline' => 'The Premier Online Bingo Experience',
@@ -125,6 +126,7 @@ class RolePermissionSeeder extends Seeder
             [
                 'name' => 'Lucky Star Gaming',
                 'status' => 'active',
+                'credit_balance' => 100000,
                 'settings' => [
                     'brand_color' => '#059669',
                     'tagline' => 'High Stakes & Fun Everyday',

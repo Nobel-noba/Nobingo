@@ -2,7 +2,10 @@
 
 namespace App\Http\Controllers\Player;
 
+use App\Domains\Games\Models\GameCard;
+use App\Domains\Games\Models\GamePlayer;
 use App\Domains\Tenancy\Models\Company;
+use App\Domains\Winners\Models\GameWinner;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -19,9 +22,9 @@ class PlayerDashboardController extends Controller
 
         $stats = [
             'balance' => $user->formattedBalance(),
-            'games_played' => 0,  // Populated in Phase 4
-            'games_won' => 0,     // Populated in Phase 7
-            'active_cards' => 0,  // Populated in Phase 4
+            'games_played' => GamePlayer::where('user_id', $user->id)->count(),
+            'games_won' => GameWinner::where('user_id', $user->id)->count(),
+            'active_cards' => GameCard::where('user_id', $user->id)->whereNull('released_at')->count(),
         ];
 
         return Inertia::render('Player/Dashboard', [

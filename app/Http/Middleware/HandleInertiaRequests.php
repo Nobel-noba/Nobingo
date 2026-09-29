@@ -59,6 +59,8 @@ class HandleInertiaRequests extends Middleware
                 'name' => $activeCompany->name,
                 'slug' => $activeCompany->slug,
                 'status' => $activeCompany->status,
+                'credit_balance' => (int) $activeCompany->credit_balance,
+                'formatted_credit_balance' => $activeCompany->formattedCreditBalance(),
                 'settings' => $activeCompany->settings,
             ] : null,
             'flash' => [

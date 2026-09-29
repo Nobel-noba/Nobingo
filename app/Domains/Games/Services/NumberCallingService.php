@@ -6,8 +6,10 @@ use App\Domains\Games\Events\NumberCalled;
 use App\Domains\Games\Models\Game;
 use App\Domains\Games\Models\GameCall;
 use App\Domains\Games\Models\GameCard;
+use App\Domains\Winners\Services\BingoVerificationService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -64,7 +66,19 @@ class NumberCallingService
             $remainingCount = count($remaining) - 1;
 
             // Dispatch event for real-time listeners and auditing
-            event(new NumberCalled($lockedGame, $call, $remainingCount, $markedCardsCount));
+            try {
+                event(new NumberCalled($lockedGame, $call, $remainingCount, $markedCardsCount));
+            } catch (\Throwable $e) {
+                Log::warning("WebSocket broadcast skipped or failed for NumberCalled: {$e->getMessage()}");
+            }
+
+            // Check for automatic bingo detection if configured
+            $autoClaim = ($lockedGame->configuration_snapshot['auto_claim'] ?? false)
+                || ($lockedGame->configuration_snapshot['automatic_bingo_detection'] ?? false);
+
+            if ($autoClaim) {
+                app(BingoVerificationService::class)->checkAutomaticWinners($lockedGame, $call);
+            }
 
             return $call;
         });

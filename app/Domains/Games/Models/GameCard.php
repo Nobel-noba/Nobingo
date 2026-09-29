@@ -19,6 +19,7 @@ class GameCard extends Model
     protected $fillable = [
         'game_id',
         'user_id',
+        'guest_identifier',
         'bingo_card_id',
         'bingo_card_version_id',
         'marked_positions',
@@ -56,6 +57,22 @@ class GameCard extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Check if card belongs to a walk-in (offline) player.
+     */
+    public function isWalkIn(): bool
+    {
+        return $this->user_id === null;
+    }
+
+    /**
+     * Display name for the player holding this card.
+     */
+    public function playerDisplayName(): string
+    {
+        return $this->user?->name ?? $this->guest_identifier ?? 'Walk-in Player';
     }
 
     /**

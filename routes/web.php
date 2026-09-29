@@ -1,18 +1,38 @@
 <?php
 
 use App\Domains\Tenancy\Models\Company;
+use App\Http\Controllers\Company\AuditLogController;
 use App\Http\Controllers\Company\CardManagementController;
+use App\Http\Controllers\Company\CompanyCreditController;
 use App\Http\Controllers\Company\CompanyDashboardController;
+use App\Http\Controllers\Company\CompanyDepositRequestController;
+use App\Http\Controllers\Company\CompanyPaymentAccountController;
+use App\Http\Controllers\Company\GameAuditController;
 use App\Http\Controllers\Company\GameManagementController;
+use App\Http\Controllers\Company\LedgerManagementController;
 use App\Http\Controllers\Company\PatternManagementController;
+use App\Http\Controllers\Company\PlayerManagementController;
+use App\Http\Controllers\Company\ReportController;
+use App\Http\Controllers\Company\TemplateManagementController;
+use App\Http\Controllers\Company\WinnerManagementController;
+use App\Http\Controllers\HealthController;
+use App\Http\Controllers\Platform\EmailSettingsController;
 use App\Http\Controllers\Platform\PlatformDashboardController;
+use App\Http\Controllers\Platform\PlatformDepositRequestController;
+use App\Http\Controllers\Platform\PlatformPaymentAccountController;
+use App\Http\Controllers\Platform\PlatformRevenueSettingsController;
+use App\Http\Controllers\Player\BingoClaimController;
 use App\Http\Controllers\Player\GameLobbyController;
 use App\Http\Controllers\Player\PlayerDashboardController;
+use App\Http\Controllers\Player\WalletController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
+
+// Production Diagnostic & Liveness Health Probe
+Route::get('/health', HealthController::class)->name('health');
 
 Route::get('/', function () {
     $companies = Company::where('status', 'active')->get();
@@ -53,7 +73,37 @@ Route::middleware(['auth', 'role:PLATFORM_OWNER'])
         Route::get('/dashboard', [PlatformDashboardController::class, 'index'])->name('dashboard');
         Route::get('/companies', [PlatformDashboardController::class, 'companies'])->name('companies');
         Route::post('/companies', [PlatformDashboardController::class, 'storeCompany'])->name('companies.store');
+        Route::get('/companies/{company}', [PlatformDashboardController::class, 'showCompany'])->name('companies.show');
+        Route::patch('/companies/{company}/settings', [PlatformDashboardController::class, 'updateCompanySettings'])->name('companies.settings');
+        Route::patch('/companies/{company}/status', [PlatformDashboardController::class, 'toggleCompanyStatus'])->name('companies.status');
+        Route::post('/companies/{company}/users/{user}/password-direct', [PlatformDashboardController::class, 'directChangeAdminPassword'])->name('companies.users.password-direct');
+        Route::post('/companies/{company}/users/{user}/request-password-reset', [PlatformDashboardController::class, 'requestAdminPasswordReset'])->name('companies.users.request-password-reset');
+        Route::post('/companies/{company}/users/{user}/confirm-password-reset', [PlatformDashboardController::class, 'confirmAdminPasswordReset'])->name('companies.users.confirm-password-reset');
+
+        // Email Service Integration Console
+        Route::get('/settings/email', [EmailSettingsController::class, 'index'])->name('settings.email');
+        Route::post('/settings/email', [EmailSettingsController::class, 'update'])->name('settings.email.update');
+        Route::post('/settings/email/test', [EmailSettingsController::class, 'sendTest'])->name('settings.email.test');
+
+        // Deposit Requests & Credit Approvals
+        Route::get('/deposit-requests', [PlatformDepositRequestController::class, 'index'])->name('deposit-requests.index');
+        Route::post('/deposit-requests/{depositRequest}/approve', [PlatformDepositRequestController::class, 'approve'])->name('deposit-requests.approve');
+        Route::post('/deposit-requests/{depositRequest}/reject', [PlatformDepositRequestController::class, 'reject'])->name('deposit-requests.reject');
+
+        // Platform Payment Accounts
+        Route::get('/payment-accounts', [PlatformPaymentAccountController::class, 'index'])->name('payment-accounts.index');
+        Route::post('/payment-accounts', [PlatformPaymentAccountController::class, 'store'])->name('payment-accounts.store');
+        Route::put('/payment-accounts/{paymentAccount}', [PlatformPaymentAccountController::class, 'update'])->name('payment-accounts.update');
+        Route::delete('/payment-accounts/{paymentAccount}', [PlatformPaymentAccountController::class, 'destroy'])->name('payment-accounts.destroy');
+
+        // Revenue Sharing Settings
+        Route::get('/settings/revenue', [PlatformRevenueSettingsController::class, 'index'])->name('settings.revenue');
+        Route::post('/settings/revenue', [PlatformRevenueSettingsController::class, 'update'])->name('settings.revenue.update');
     });
+
+// Public Signed Email Verification Route
+Route::get('/platform/verify-email/{user}', [PlatformDashboardController::class, 'verifyEmail'])
+    ->name('platform.verify-email');
 
 // Company Administration Routes
 Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN,GAME_MANAGER'])
@@ -80,6 +130,51 @@ Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN,GAME_MAN
         Route::get('/games/{game}', [GameManagementController::class, 'show'])->name('games.show');
         Route::patch('/games/{game}/status', [GameManagementController::class, 'updateStatus'])->name('games.update-status');
         Route::post('/games/{game}/call-next', [GameManagementController::class, 'callNext'])->name('games.call-next');
+        Route::post('/games/{game}/assign-card', [GameManagementController::class, 'assignCard'])->name('games.assign-card');
+        Route::post('/games/{game}/claims/{winner}/confirm', [GameManagementController::class, 'confirmClaim'])->name('games.claims.confirm');
+        Route::post('/games/{game}/claims/{winner}/reject', [GameManagementController::class, 'rejectClaim'])->name('games.claims.reject');
+        Route::post('/games/{game}/verify-card', [GameManagementController::class, 'verifyCard'])->name('games.verify-card');
+        Route::post('/games/{game}/declare-walkin-winner', [GameManagementController::class, 'declareWalkInWinner'])->name('games.declare-walkin-winner');
+        Route::get('/games/{game}/audit', [GameAuditController::class, 'show'])->name('games.audit');
+
+        // Game Templates (Phase 9)
+        Route::get('/templates', [TemplateManagementController::class, 'index'])->name('templates.index');
+        Route::post('/templates', [TemplateManagementController::class, 'store'])->name('templates.store');
+        Route::patch('/templates/{template}/toggle', [TemplateManagementController::class, 'toggle'])->name('templates.toggle');
+
+        // Player Directory & Moderation (Phase 9)
+        Route::get('/players', [PlayerManagementController::class, 'index'])->name('players.index');
+        Route::get('/players/{player}', [PlayerManagementController::class, 'show'])->name('players.show');
+        Route::patch('/players/{player}/toggle-status', [PlayerManagementController::class, 'toggleStatus'])->name('players.toggle-status');
+        Route::post('/players/{player}/adjust-balance', [PlayerManagementController::class, 'adjustBalance'])->name('players.adjust-balance');
+
+        // Winners Ledger (Phase 7)
+        Route::get('/winners', [WinnerManagementController::class, 'index'])->name('winners.index');
+
+        // Treasury & Financial Ledger (Phase 8)
+        Route::get('/ledger', [LedgerManagementController::class, 'index'])->name('ledger.index');
+
+        // Company Platform Credits (Phase 8 & Multitenant Billing)
+        Route::get('/credits', [CompanyCreditController::class, 'index'])->name('credits.index');
+        Route::post('/credits/buy', [CompanyCreditController::class, 'store'])->name('credits.store');
+
+        // Company Payment Accounts (For player deposit receipts)
+        Route::get('/payment-accounts', [CompanyPaymentAccountController::class, 'index'])->name('payment-accounts.index');
+        Route::post('/payment-accounts', [CompanyPaymentAccountController::class, 'store'])->name('payment-accounts.store');
+        Route::put('/payment-accounts/{paymentAccount}', [CompanyPaymentAccountController::class, 'update'])->name('payment-accounts.update');
+        Route::delete('/payment-accounts/{paymentAccount}', [CompanyPaymentAccountController::class, 'destroy'])->name('payment-accounts.destroy');
+
+        // Player Deposit Requests & Manual Top-up
+        Route::get('/deposit-requests', [CompanyDepositRequestController::class, 'index'])->name('deposit-requests.index');
+        Route::post('/deposit-requests/{depositRequest}/approve', [CompanyDepositRequestController::class, 'approve'])->name('deposit-requests.approve');
+        Route::post('/deposit-requests/{depositRequest}/reject', [CompanyDepositRequestController::class, 'reject'])->name('deposit-requests.reject');
+        Route::post('/players/manual-deposit', [CompanyDepositRequestController::class, 'manualDeposit'])->name('players.manual-deposit');
+
+        // Tenant Audit Logs (Phase 9)
+        Route::get('/audit-logs', [AuditLogController::class, 'index'])->name('audit-logs.index');
+
+        // Analytics & Reports (Phase 9)
+        Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
     });
 
 // Player Tenant Routes
@@ -92,7 +187,24 @@ Route::middleware(['auth', 'tenant'])
         Route::post('/games/{game}/join', [GameLobbyController::class, 'join'])->name('games.join');
         Route::get('/game/{game}', [GameLobbyController::class, 'show'])->name('game.show');
         Route::get('/game/{game}/state', [GameLobbyController::class, 'state'])->name('game.state');
-        Route::post('/game/{game}/cards/{gameCard}/daub', [GameLobbyController::class, 'daub'])->name('game.cards.daub');
+        Route::post('/game/{game}/cards/{gameCard}/daub', [GameLobbyController::class, 'daub'])
+            ->middleware('throttle:bingo.daub')
+            ->name('game.cards.daub');
+        Route::post('/game/{game}/cards/{gameCard}/claim-bingo', [BingoClaimController::class, 'claim'])
+            ->middleware('throttle:bingo.claim')
+            ->name('game.cards.claim-bingo');
+
+        // Wallet & Financial Transactions (Phase 8)
+        Route::get('/wallet', [WalletController::class, 'index'])->name('wallet.index');
+        Route::post('/wallet/deposit', [WalletController::class, 'deposit'])
+            ->middleware('throttle:wallet.operations')
+            ->name('wallet.deposit');
+        Route::post('/wallet/deposit-request', [WalletController::class, 'storeDepositRequest'])
+            ->middleware('throttle:wallet.operations')
+            ->name('wallet.deposit-request');
+        Route::post('/wallet/withdraw', [WalletController::class, 'withdraw'])
+            ->middleware('throttle:wallet.operations')
+            ->name('wallet.withdraw');
     });
 
 // Account Profile Routes

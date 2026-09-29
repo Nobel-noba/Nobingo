@@ -20,14 +20,16 @@ class GameTemplateSeeder extends Seeder
         $xId = WinningPattern::where('slug', 'x_pattern')->pluck('id')->all();
         $fullCardId = WinningPattern::where('slug', 'full_card')->pluck('id')->all();
 
+        $linePatternIds = array_values(array_unique(array_merge($horizontalIds, $verticalIds, $diagonalIds)));
+
         $templates = [
             [
                 'name' => 'Single Line',
                 'slug' => 'single_line',
-                'description' => 'Fast-paced game. First player to complete any single horizontal line wins.',
+                'description' => 'Fast-paced game. First player to complete any single line (Horizontal, Vertical, or Diagonal) wins.',
                 'pattern_mode' => 'single',
                 'required_pattern_count' => 1,
-                'allowed_pattern_ids' => $horizontalIds,
+                'allowed_pattern_ids' => $linePatternIds,
                 'winner_policy' => Game::WINNER_POLICY_FIRST_VALID,
                 'default_call_interval' => 5,
                 'default_min_players' => 1,
@@ -38,10 +40,10 @@ class GameTemplateSeeder extends Seeder
             [
                 'name' => 'Double Line',
                 'slug' => 'double_line',
-                'description' => 'Complete two distinct horizontal rows to claim victory.',
+                'description' => 'Complete two distinct lines (Horizontal, Vertical, or Diagonal) to claim victory.',
                 'pattern_mode' => 'multiple',
                 'required_pattern_count' => 2,
-                'allowed_pattern_ids' => $horizontalIds,
+                'allowed_pattern_ids' => $linePatternIds,
                 'winner_policy' => Game::WINNER_POLICY_FIRST_VALID,
                 'default_call_interval' => 5,
                 'default_min_players' => 2,
@@ -52,10 +54,10 @@ class GameTemplateSeeder extends Seeder
             [
                 'name' => 'Triple Line',
                 'slug' => 'triple_line',
-                'description' => 'High intensity match requiring three distinct completed horizontal lines.',
+                'description' => 'High intensity match requiring three distinct completed lines (Horizontal, Vertical, or Diagonal).',
                 'pattern_mode' => 'multiple',
                 'required_pattern_count' => 3,
-                'allowed_pattern_ids' => $horizontalIds,
+                'allowed_pattern_ids' => $linePatternIds,
                 'winner_policy' => Game::WINNER_POLICY_FIRST_VALID,
                 'default_call_interval' => 5,
                 'default_min_players' => 2,

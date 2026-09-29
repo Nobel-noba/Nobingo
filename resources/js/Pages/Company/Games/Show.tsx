@@ -5,20 +5,26 @@ import { useState, useEffect } from 'react';
 
 interface GamePlayerItem {
     id: number;
+    user_id?: number | null;
+    guest_identifier?: string | null;
     joined_at: string;
-    user: {
+    user?: {
         id: number;
         name: string;
         email: string;
-    };
+    } | null;
 }
 
 interface GameCardItem {
     id: number;
+    user_id?: number | null;
+    guest_identifier?: string | null;
     assigned_at: string;
-    user: {
+    user?: {
+        id?: number;
         name: string;
-    };
+        email?: string;
+    } | null;
     card: {
         id: number;
         card_number: number;
@@ -65,23 +71,286 @@ interface GameDetail {
     cards: GameCardItem[];
     calls: GameCallItem[];
     last_call?: GameCallItem | null;
+    winners?: Array<{
+        id: number;
+        user_id?: number | null;
+        game_card_id: number;
+        winning_call_sequence: number;
+        winning_ball_number: number;
+        claim_type: string;
+        payout_amount: number;
+        split_ratio: number;
+        payout_status?: string;
+        claimed_at: string;
+        user?: {
+            name: string;
+            email: string;
+        } | null;
+        card?: {
+            id?: number;
+            guest_identifier?: string | null;
+            card?: {
+                card_number: string | number;
+            };
+            version?: {
+                grid?: number[][];
+            };
+        } | null;
+        pattern?: {
+            name: string;
+        };
+        winning_patterns_snapshot?: Array<{ name: string }>;
+    }>;
     created_at: string;
+}
+
+interface CardVerificationData {
+    is_valid: boolean;
+    completed_count: number;
+    required_count: number;
+    completed_patterns?: Array<{ id: number; name: string; slug: string; coordinates?: number[][] }>;
+    completed_slugs?: string[];
+    grid?: number[][];
+    marked_grid?: boolean[][];
+    reason?: string | null;
+    card_number?: number;
+    game_card_id?: number;
+    player_name?: string;
+    is_walkin?: boolean;
+    estimated_payout?: number;
+    winner_id?: number;
 }
 
 interface Props extends PageProps {
     game: GameDetail;
     available_cards_count: number;
+    available_card_numbers?: number[];
+    company_players?: Array<{ id: number; name: string; email: string }>;
     master_board: Record<string, BoardCell[]>;
     remaining_count: number;
 }
 
-export default function GameShow({ game, available_cards_count, master_board, remaining_count, tenant }: Props) {
+export default function GameShow({
+    game,
+    available_cards_count,
+    available_card_numbers = [],
+    company_players = [],
+    master_board,
+    remaining_count,
+    tenant,
+}: Props) {
     const companySlug = tenant?.slug || 'default';
     const [calling, setCalling] = useState(false);
     const [autoCallActive, setAutoCallActive] = useState(false);
     const [liveGame, setLiveGame] = useState(game);
     const [liveBoard, setLiveBoard] = useState(master_board);
     const [liveRemaining, setLiveRemaining] = useState(remaining_count);
+
+    // Card Assignment Modal State
+    const [assignModalOpen, setAssignModalOpen] = useState(false);
+    const [isWalkIn, setIsWalkIn] = useState(false);
+    const [selectedUserId, setSelectedUserId] = useState<number | ''>('');
+    const [guestIdentifier, setGuestIdentifier] = useState<string>('');
+    const [targetCardNumber, setTargetCardNumber] = useState<string>('');
+    const [assigningCard, setAssigningCard] = useState(false);
+    const [assignError, setAssignError] = useState<string | null>(null);
+
+    const openAssignModal = (targetUser?: { id?: number | null; name?: string; currentCard?: number; isWalkIn?: boolean; guestIdentifier?: string }) => {
+        setAssignError(null);
+        if (targetUser && targetUser.isWalkIn) {
+            setIsWalkIn(true);
+            setSelectedUserId('');
+            setGuestIdentifier(targetUser.guestIdentifier || targetUser.name || '');
+            setTargetCardNumber(targetUser.currentCard ? String(targetUser.currentCard) : '');
+        } else if (targetUser && targetUser.id) {
+            setIsWalkIn(false);
+            setSelectedUserId(targetUser.id);
+            setGuestIdentifier('');
+            setTargetCardNumber(targetUser.currentCard ? String(targetUser.currentCard) : '');
+        } else {
+            setIsWalkIn(false);
+            const firstId = liveGame.players.find(p => p.user)?.user?.id || company_players[0]?.id || '';
+            setSelectedUserId(firstId);
+            setGuestIdentifier('');
+            setTargetCardNumber('');
+        }
+        setAssignModalOpen(true);
+    };
+
+    const handleAssignCard = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!isWalkIn && !selectedUserId) return;
+        if (!targetCardNumber) return;
+
+        setAssigningCard(true);
+        setAssignError(null);
+
+        router.post(`/c/${companySlug}/admin/games/${game.id}/assign-card`, {
+            is_walkin: isWalkIn,
+            user_id: isWalkIn ? null : selectedUserId,
+            card_number: parseInt(targetCardNumber, 10),
+            guest_identifier: isWalkIn ? (guestIdentifier || `Walk-in Cash Player (#${targetCardNumber})`) : null,
+        }, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setAssignModalOpen(false);
+                setTargetCardNumber('');
+                setIsWalkIn(false);
+                setGuestIdentifier('');
+                setAssigningCard(false);
+            },
+            onError: (errs) => {
+                setAssignError(Object.values(errs).join(', ') || 'Failed to assign card.');
+                setAssigningCard(false);
+            },
+            onFinish: () => {
+                setAssigningCard(false);
+            },
+        });
+    };
+
+    // Verification & Claim Resolution Modal State
+    const [verificationModalOpen, setVerificationModalOpen] = useState(false);
+    const [verifyingCard, setVerifyingCard] = useState(false);
+    const [verificationData, setVerificationData] = useState<CardVerificationData | null>(null);
+    const [resolvingClaim, setResolvingClaim] = useState(false);
+    const [resolveError, setResolveError] = useState<string | null>(null);
+
+    // Quick Card Lookup Modal State
+    const [lookupModalOpen, setLookupModalOpen] = useState(false);
+    const [lookupCardNumber, setLookupCardNumber] = useState('');
+
+    const openVerifyModalForWinner = async (winner: any) => {
+        setResolveError(null);
+        setVerifyingCard(true);
+        setVerificationData(null);
+        setVerificationModalOpen(true);
+        try {
+            const csrfToken = (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content;
+            const res = await fetch(`/c/${companySlug}/admin/games/${game.id}/verify-card`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken || '',
+                },
+                body: JSON.stringify({ game_card_id: winner.game_card_id }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setVerificationData({
+                    ...data,
+                    winner_id: winner.id,
+                    player_name: winner.user?.name || winner.card?.guest_identifier || data.player_name || 'Player',
+                    estimated_payout: winner.payout_amount || data.estimated_payout,
+                });
+            } else {
+                setResolveError(data.error || 'Failed to inspect card.');
+            }
+        } catch {
+            setResolveError('Network error while inspecting card.');
+        } finally {
+            setVerifyingCard(false);
+        }
+    };
+
+    const openVerifyModalForCard = async (target: { cardNumber?: number; gameCardId?: number; playerName?: string }) => {
+        setResolveError(null);
+        setVerifyingCard(true);
+        setVerificationData(null);
+        setVerificationModalOpen(true);
+        try {
+            const csrfToken = (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content;
+            const res = await fetch(`/c/${companySlug}/admin/games/${game.id}/verify-card`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken || '',
+                },
+                body: JSON.stringify({
+                    card_number: target.cardNumber,
+                    game_card_id: target.gameCardId,
+                }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setVerificationData({
+                    ...data,
+                    player_name: target.playerName || data.player_name,
+                });
+            } else {
+                setResolveError(data.error || 'Failed to inspect card.');
+            }
+        } catch {
+            setResolveError('Network error while inspecting card.');
+        } finally {
+            setVerifyingCard(false);
+        }
+    };
+
+    const handleConfirmClaim = () => {
+        if (!verificationData?.winner_id) return;
+        setResolvingClaim(true);
+        setResolveError(null);
+
+        router.post(`/c/${companySlug}/admin/games/${game.id}/claims/${verificationData.winner_id}/confirm`, {}, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setVerificationModalOpen(false);
+                setResolvingClaim(false);
+            },
+            onError: (errs) => {
+                setResolveError(Object.values(errs).join(', ') || 'Failed to confirm claim.');
+                setResolvingClaim(false);
+            },
+            onFinish: () => setResolvingClaim(false),
+        });
+    };
+
+    const handleRejectClaim = () => {
+        if (!verificationData?.winner_id) return;
+        if (!confirm('Are you sure you want to reject this claim? The game will remain paused so you can resume calling balls.')) return;
+        setResolvingClaim(true);
+        setResolveError(null);
+
+        router.post(`/c/${companySlug}/admin/games/${game.id}/claims/${verificationData.winner_id}/reject`, {}, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setVerificationModalOpen(false);
+                setResolvingClaim(false);
+            },
+            onError: (errs) => {
+                setResolveError(Object.values(errs).join(', ') || 'Failed to reject claim.');
+                setResolvingClaim(false);
+            },
+            onFinish: () => setResolvingClaim(false),
+        });
+    };
+
+    const handleDeclareWalkInWinner = () => {
+        if (!verificationData?.game_card_id && !verificationData?.card_number) return;
+        setResolvingClaim(true);
+        setResolveError(null);
+
+        router.post(`/c/${companySlug}/admin/games/${game.id}/declare-walkin-winner`, {
+            game_card_id: verificationData.game_card_id,
+            card_number: verificationData.card_number,
+        }, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setVerificationModalOpen(false);
+                setResolvingClaim(false);
+            },
+            onError: (errs) => {
+                setResolveError(Object.values(errs).join(', ') || 'Failed to declare walk-in winner.');
+                setResolvingClaim(false);
+            },
+            onFinish: () => setResolvingClaim(false),
+        });
+    };
+
+    const pendingWinners = liveGame.winners?.filter(w => w.payout_status === 'pending') || [];
 
     useEffect(() => {
         setLiveGame(game);
@@ -137,10 +406,25 @@ export default function GameShow({ game, available_cards_count, master_board, re
             router.reload({ only: ['game'] });
         });
 
+        channel.listen('.game.won', () => {
+            router.reload({ only: ['game'] });
+        });
+
+        channel.listen('.bingo.claim.submitted', () => {
+            router.reload({ only: ['game'] });
+        });
+
+        channel.listen('.bingo.claim.rejected', () => {
+            router.reload({ only: ['game'] });
+        });
+
         return () => {
             channel.stopListening('.number.called');
             channel.stopListening('.game.state.changed');
             channel.stopListening('.player.joined');
+            channel.stopListening('.game.won');
+            channel.stopListening('.bingo.claim.submitted');
+            channel.stopListening('.bingo.claim.rejected');
             window.Echo.leave(channelName);
         };
     }, [game.id, tenant?.id]);
@@ -214,21 +498,21 @@ export default function GameShow({ game, available_cards_count, master_board, re
                             Game #{game.game_number}: {game.name}
                         </h1>
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize ${
-                            game.status === 'open'
+                            liveGame.status === 'open'
                                 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                : game.status === 'active'
+                                : liveGame.status === 'active'
                                 ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse'
-                                : game.status === 'starting'
+                                : liveGame.status === 'starting'
                                 ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
                                 : 'bg-neutral-500/10 text-neutral-400 border border-neutral-500/20'
                         }`}>
-                            {game.status}
+                            {liveGame.status}
                         </span>
                     </div>
 
                     {/* Operator Control Actions */}
                     <div className="flex items-center space-x-2">
-                        {game.status === 'draft' && (
+                        {liveGame.status === 'draft' && (
                             <button
                                 onClick={() => handleTransition('open')}
                                 className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md transition"
@@ -237,7 +521,7 @@ export default function GameShow({ game, available_cards_count, master_board, re
                             </button>
                         )}
 
-                        {game.status === 'open' && (
+                        {liveGame.status === 'open' && (
                             <>
                                 <button
                                     onClick={() => handleTransition('active')}
@@ -254,7 +538,7 @@ export default function GameShow({ game, available_cards_count, master_board, re
                             </>
                         )}
 
-                        {game.status === 'active' && (
+                        {liveGame.status === 'active' && (
                             <>
                                 <button
                                     onClick={() => handleTransition('paused')}
@@ -270,8 +554,7 @@ export default function GameShow({ game, available_cards_count, master_board, re
                                 </button>
                             </>
                         )}
-
-                        {game.status === 'paused' && (
+                        {liveGame.status === 'paused' && (
                             <button
                                 onClick={() => handleTransition('active')}
                                 className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition"
@@ -279,6 +562,21 @@ export default function GameShow({ game, available_cards_count, master_board, re
                                 Resume Session
                             </button>
                         )}
+
+                        <button
+                            type="button"
+                            onClick={() => setLookupModalOpen(true)}
+                            className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm"
+                        >
+                            <span>🔍</span> Check Card
+                        </button>
+
+                        <Link
+                            href={`/c/${companySlug}/admin/games/${game.id}/audit`}
+                            className="bg-indigo-950/70 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/60 text-xs font-bold px-3.5 py-2 rounded-xl transition flex items-center shadow-sm"
+                        >
+                            Audit & Replay
+                        </Link>
                     </div>
                 </div>
             }
@@ -286,6 +584,56 @@ export default function GameShow({ game, available_cards_count, master_board, re
             <Head title={`Game #${game.game_number}`} />
 
             <div className="space-y-6">
+                {/* Pending Bingo Claims Alert Banner */}
+                {pendingWinners.length > 0 && (
+                    <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/20 via-yellow-500/20 to-amber-500/20 border-2 border-amber-500 text-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
+                        <div className="flex items-center gap-3">
+                            <span className="text-3xl animate-bounce">🚨</span>
+                            <div>
+                                <div className="font-black text-sm text-amber-100 uppercase tracking-wider flex items-center gap-2">
+                                    <span>BINGO CLAIM PENDING VERIFICATION ({pendingWinners.length})</span>
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-400 text-neutral-950 text-[10px] font-black uppercase">
+                                        Action Required
+                                    </span>
+                                </div>
+                                <div className="text-xs text-amber-200/90 mt-0.5">
+                                    {pendingWinners[0].user?.name || pendingWinners[0].card?.guest_identifier || 'Player'} has called BINGO on Card #{pendingWinners[0].card?.card?.card_number || pendingWinners[0].game_card_id}! Game is PAUSED. Inspect the card to approve win & release payout, or reject false claim.
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => openVerifyModalForWinner(pendingWinners[0])}
+                                className="px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs transition shadow-lg whitespace-nowrap flex items-center gap-1.5 cursor-pointer"
+                            >
+                                <span>🔍</span>
+                                <span>Inspect & Verify Card</span>
+                            </button>
+                        </div>
+                    </div>
+                )}
+                {/* Company Credit Warning Banner */}
+                {((tenant as any)?.credit_balance ?? 0) <= 0 && ['draft', 'open'].includes(liveGame.status) && (
+                    <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-md">
+                        <div className="flex items-center gap-3">
+                            <span className="text-2xl">⚠️</span>
+                            <div>
+                                <div className="font-bold text-sm text-amber-200">Company Credit Balance is $0.00</div>
+                                <div className="text-xs text-amber-300/80">
+                                    You must purchase platform credits before activating or starting this game.
+                                </div>
+                            </div>
+                        </div>
+                        <Link
+                            href={`/c/${companySlug}/admin/credits`}
+                            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs text-center transition shadow-sm whitespace-nowrap"
+                        >
+                            Buy Platform Credits &rarr;
+                        </Link>
+                    </div>
+                )}
+
                 {/* Master Ball Calling Console */}
                 <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-xl">
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-neutral-800">
@@ -415,6 +763,61 @@ export default function GameShow({ game, available_cards_count, master_board, re
                     )}
                 </div>
 
+                {/* Verified Winners Banner */}
+                {liveGame.winners && liveGame.winners.length > 0 && (
+                    <div className="bg-gradient-to-r from-amber-950/40 via-neutral-900 to-amber-950/40 border-2 border-amber-500/50 rounded-3xl p-6 shadow-xl shadow-amber-500/10 mb-6">
+                        <div className="flex items-center space-x-3 mb-4">
+                            <span className="text-3xl">🏆</span>
+                            <div>
+                                <h2 className="text-lg font-black text-amber-300">
+                                    Verified Game Winner{liveGame.winners.length > 1 ? 's' : ''} ({liveGame.winners.length})
+                                </h2>
+                                <p className="text-xs text-neutral-400">
+                                    Server-authoritatively verified claims and pattern evaluations
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {liveGame.winners.map((winner) => {
+                                const patterns = winner.winning_patterns_snapshot || [];
+                                const patternNames = patterns.map((p) => p.name).join(', ') || winner.pattern?.name || 'Winning Pattern';
+
+                                return (
+                                    <div
+                                        key={winner.id}
+                                        className="bg-neutral-950/80 border border-amber-500/30 rounded-2xl p-4 space-y-2 text-xs"
+                                    >
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-bold text-white text-sm">{winner.user?.name ?? 'Player'}</span>
+                                            <span className="font-mono text-indigo-400 font-bold">
+                                                {winner.card?.card?.card_number ?? `#${winner.id}`}
+                                            </span>
+                                        </div>
+                                        <div className="text-[10px] text-neutral-400">{winner.user?.email}</div>
+                                        <div className="flex justify-between py-1 border-t border-neutral-800">
+                                            <span className="text-neutral-400">Winning Ball:</span>
+                                            <span className="font-bold text-amber-300">
+                                                Ball {winner.winning_ball_number} (Call #{winner.winning_call_sequence})
+                                            </span>
+                                        </div>
+                                        <div className="flex justify-between py-1 border-t border-neutral-800">
+                                            <span className="text-neutral-400">Pattern:</span>
+                                            <span className="font-semibold text-white">{patternNames}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center pt-1 border-t border-neutral-800">
+                                            <span className="text-[10px] uppercase font-bold text-neutral-500">{winner.claim_type} claim</span>
+                                            <span className="font-black text-emerald-400 text-sm">
+                                                ${(winner.payout_amount / 100).toFixed(2)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                     {/* Left Column: Room Overview & Configuration Snapshot */}
                     <div className="lg:col-span-4 space-y-6">
@@ -488,18 +891,27 @@ export default function GameShow({ game, available_cards_count, master_board, re
                     {/* Right Column: Live Players & Fixed Cards Assigned */}
                     <div className="lg:col-span-8">
                         <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-sm">
-                            <div className="flex justify-between items-center mb-6">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                                 <div>
                                     <h2 className="text-base font-bold text-white">
-                                        Registered Players & Assigned Cards ({game.cards.length})
+                                        Registered Players & Assigned Cards ({liveGame.cards.length})
                                     </h2>
                                     <p className="text-xs text-neutral-400">
-                                        Each player is atomically allocated a unique fixed card from inventory
+                                        Assign specific fixed cards from inventory or reassign player cards
                                     </p>
                                 </div>
-                                <span className="text-xs font-mono text-indigo-400 font-semibold">
-                                    {game.players.length} joined
-                                </span>
+                                <div className="flex items-center gap-3">
+                                    <span className="text-xs font-mono text-indigo-400 font-semibold">
+                                        {liveGame.players.length} joined
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => openAssignModal()}
+                                        className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 transition shadow-sm"
+                                    >
+                                        <span>➕</span> Assign Card
+                                    </button>
+                                </div>
                             </div>
 
                             <div className="overflow-x-auto">
@@ -509,33 +921,103 @@ export default function GameShow({ game, available_cards_count, master_board, re
                                             <th className="px-4 py-3 font-semibold">Player</th>
                                             <th className="px-4 py-3 font-semibold">Assigned Fixed Card</th>
                                             <th className="px-4 py-3 font-semibold">Version</th>
-                                            <th className="px-4 py-3 font-semibold text-right">Joined At</th>
+                                            <th className="px-4 py-3 font-semibold">Joined At</th>
+                                            <th className="px-4 py-3 font-semibold text-right">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-neutral-800/80 text-neutral-200 text-xs">
-                                        {game.cards.length === 0 ? (
+                                        {liveGame.players.length === 0 && liveGame.cards.length === 0 ? (
                                             <tr>
-                                                <td colSpan={4} className="px-4 py-8 text-center text-neutral-500">
+                                                <td colSpan={5} className="px-4 py-8 text-center text-neutral-500">
                                                     No players have joined this room yet.
                                                 </td>
                                             </tr>
                                         ) : (
-                                            game.cards.map((item) => (
-                                                <tr key={item.id} className="hover:bg-neutral-800/40">
-                                                    <td className="px-4 py-3 font-bold text-white">
-                                                        {item.user.name}
-                                                    </td>
-                                                    <td className="px-4 py-3 font-mono font-bold text-amber-400">
-                                                        #{String(item.card.card_number).padStart(6, '0')}
-                                                    </td>
-                                                    <td className="px-4 py-3 text-indigo-400 font-semibold">
-                                                        v{item.version.version_number}
-                                                    </td>
-                                                    <td className="px-4 py-3 text-right text-neutral-500">
-                                                        {new Date(item.assigned_at).toLocaleTimeString()}
-                                                    </td>
-                                                </tr>
-                                            ))
+                                            // Map through liveGame.players or fallback to liveGame.cards
+                                            (liveGame.players.length > 0 ? liveGame.players : liveGame.cards.map(c => ({
+                                                id: c.id,
+                                                joined_at: c.assigned_at,
+                                                guest_identifier: c.guest_identifier,
+                                                user: c.user || null,
+                                            }))).map((playerItem) => {
+                                                const isWalkInPlayer = !playerItem.user || Boolean(playerItem.guest_identifier);
+                                                const displayName = playerItem.user?.name || playerItem.guest_identifier || 'Walk-in Cash Player';
+
+                                                const assignedCard = liveGame.cards.find(
+                                                    (c) => (c.user_id && playerItem.user?.id && c.user_id === playerItem.user.id) ||
+                                                           (c.guest_identifier && c.guest_identifier === playerItem.guest_identifier) ||
+                                                           (c.id === playerItem.id)
+                                                );
+
+                                                return (
+                                                    <tr key={playerItem.id} className="hover:bg-neutral-800/40">
+                                                        <td className="px-4 py-3">
+                                                            {isWalkInPlayer ? (
+                                                                <div>
+                                                                    <div className="font-bold text-amber-300 flex items-center gap-1.5">
+                                                                        <span>💵</span>
+                                                                        <span>{displayName}</span>
+                                                                        <span className="px-1.5 py-0.5 rounded text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase font-black tracking-wide">
+                                                                            Walk-in Cash
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="text-[10px] text-neutral-500 font-mono">Paid entry fee at venue</div>
+                                                                </div>
+                                                            ) : (
+                                                                <div>
+                                                                    <div className="font-bold text-white">{playerItem.user?.name}</div>
+                                                                    <div className="text-[10px] text-neutral-500 font-mono">{playerItem.user?.email}</div>
+                                                                </div>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-3 font-mono font-bold">
+                                                            {assignedCard ? (
+                                                                <span className="text-amber-400">
+                                                                    #{String(assignedCard.card.card_number).padStart(6, '0')}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-neutral-500 italic">No card assigned</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-indigo-400 font-semibold">
+                                                            {assignedCard ? `v${assignedCard.version.version_number}` : '-'}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-neutral-400">
+                                                            {new Date(assignedCard?.assigned_at || playerItem.joined_at).toLocaleTimeString()}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-right">
+                                                            <div className="flex items-center justify-end gap-1.5">
+                                                                {assignedCard && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => openVerifyModalForCard({
+                                                                            cardNumber: assignedCard.card.card_number,
+                                                                            gameCardId: assignedCard.id,
+                                                                            playerName: displayName,
+                                                                        })}
+                                                                        className="px-2.5 py-1 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-300 font-bold text-xs transition border border-indigo-700/60"
+                                                                    >
+                                                                        Check BINGO
+                                                                    </button>
+                                                                )}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => openAssignModal({
+                                                                        id: playerItem.user?.id || null,
+                                                                        name: displayName,
+                                                                        isWalkIn: isWalkInPlayer,
+                                                                        guestIdentifier: playerItem.guest_identifier || '',
+                                                                        currentCard: assignedCard?.card?.card_number,
+                                                                    })}
+                                                                    className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-400 hover:text-amber-300 font-bold text-xs transition border border-neutral-700"
+                                                                >
+                                                                    {assignedCard ? 'Change Card' : 'Assign Card'}
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
                                         )}
                                     </tbody>
                                 </table>
@@ -543,6 +1025,397 @@ export default function GameShow({ game, available_cards_count, master_board, re
                         </div>
                     </div>
                 </div>
+
+                {/* Specific Card Assignment Modal */}
+                {assignModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                        <div className="bg-neutral-900 border border-neutral-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-6">
+                            <div className="flex justify-between items-center pb-4 border-b border-neutral-800">
+                                <div>
+                                    <h3 className="text-base font-bold text-white">Assign Fixed Card</h3>
+                                    <p className="text-xs text-neutral-400 mt-0.5">
+                                        Allocate an inventory card to an online player or walk-in cash customer
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setAssignModalOpen(false)}
+                                    className="text-neutral-400 hover:text-white text-lg p-1"
+                                >
+                                    &times;
+                                </button>
+                            </div>
+
+                            {assignError && (
+                                <div className="p-3.5 rounded-2xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs">
+                                    {assignError}
+                                </div>
+                            )}
+
+                            <form onSubmit={handleAssignCard} className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-neutral-300 mb-2">
+                                        Player Type
+                                    </label>
+                                    <div className="grid grid-cols-2 gap-2 p-1 bg-neutral-950 border border-neutral-800 rounded-xl">
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsWalkIn(false)}
+                                            className={`py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                                                !isWalkIn
+                                                    ? 'bg-indigo-600 text-white shadow-sm'
+                                                    : 'text-neutral-400 hover:text-white'
+                                            }`}
+                                        >
+                                            <span>📱</span> Registered Online
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsWalkIn(true)}
+                                            className={`py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                                                isWalkIn
+                                                    ? 'bg-amber-500 text-neutral-950 shadow-sm'
+                                                    : 'text-neutral-400 hover:text-white'
+                                            }`}
+                                        >
+                                            <span>💵</span> Walk-in Cash
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {isWalkIn ? (
+                                    <div>
+                                        <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                                            Guest Identifier / Table Note <span className="text-neutral-500">(Optional)</span>
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={guestIdentifier}
+                                            onChange={(e) => setGuestIdentifier(e.target.value)}
+                                            placeholder="e.g. Table 4 - Alex, Cash Guest #1"
+                                            className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-600 focus:border-amber-500 focus:outline-none"
+                                        />
+                                        <p className="text-[11px] text-amber-400/80 mt-1">
+                                            Walk-in player pays cash over counter. Identified by their card number.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                                            Online Player <span className="text-rose-400">*</span>
+                                        </label>
+                                        <select
+                                            value={selectedUserId}
+                                            onChange={(e) => setSelectedUserId(Number(e.target.value))}
+                                            className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                                        >
+                                            <option value="">-- Choose Player --</option>
+                                            {company_players && company_players.length > 0 ? (
+                                                company_players.map((p) => (
+                                                    <option key={p.id} value={p.id}>
+                                                        {p.name} ({p.email})
+                                                    </option>
+                                                ))
+                                            ) : (
+                                                liveGame.players.filter(p => p.user).map((p) => (
+                                                    <option key={p.user!.id} value={p.user!.id}>
+                                                        {p.user!.name} ({p.user!.email})
+                                                    </option>
+                                                ))
+                                            )}
+                                        </select>
+                                    </div>
+                                )}
+
+                                <div>
+                                    <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                                        Target Card Number <span className="text-rose-400">*</span>
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        required
+                                        value={targetCardNumber}
+                                        onChange={(e) => setTargetCardNumber(e.target.value)}
+                                        placeholder="e.g. 42 or 100"
+                                        className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-600 focus:border-indigo-500 focus:outline-none"
+                                    />
+                                    <p className="text-[11px] text-neutral-500 mt-1">
+                                        Input the exact card number from inventory (e.g. 1 to {available_cards_count || 1000})
+                                    </p>
+                                </div>
+
+                                {/* Quick pick chips */}
+                                {available_card_numbers && available_card_numbers.length > 0 && (
+                                    <div>
+                                        <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-1.5">
+                                            Quick Pick Available Cards
+                                        </span>
+                                        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
+                                            {available_card_numbers.slice(0, 20).map((num) => (
+                                                <button
+                                                    key={num}
+                                                    type="button"
+                                                    onClick={() => setTargetCardNumber(String(num))}
+                                                    className={`px-2 py-1 rounded-lg text-xs font-mono font-bold transition border ${
+                                                        targetCardNumber === String(num)
+                                                            ? 'bg-amber-400 text-neutral-950 border-amber-300'
+                                                            : 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:border-neutral-700'
+                                                    }`}
+                                                >
+                                                    #{String(num).padStart(4, '0')}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="pt-4 border-t border-neutral-800 flex justify-end gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setAssignModalOpen(false)}
+                                        className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={assigningCard || (!isWalkIn && !selectedUserId) || !targetCardNumber}
+                                        className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs disabled:opacity-50 transition shadow-sm"
+                                    >
+                                        {assigningCard ? 'Assigning...' : 'Assign Card'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
+                {/* Card Verification & Claim Resolution Modal */}
+                {verificationModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+                        <div className="bg-neutral-900 border border-neutral-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+                            {/* Modal Header */}
+                            <div className="flex justify-between items-center pb-4 border-b border-neutral-800">
+                                <div>
+                                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                                        <span>Bingo Card Verification</span>
+                                        {verificationData?.is_walkin && (
+                                            <span className="px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase font-black">
+                                                Walk-in Cash
+                                            </span>
+                                        )}
+                                    </h3>
+                                    <p className="text-xs text-neutral-400 mt-0.5">
+                                        Card #{verificationData?.card_number ? String(verificationData.card_number).padStart(6, '0') : '-'} &bull; {verificationData?.player_name || 'Player'}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setVerificationModalOpen(false)}
+                                    className="text-neutral-400 hover:text-white text-xl p-1"
+                                >
+                                    &times;
+                                </button>
+                            </div>
+
+                            {resolveError && (
+                                <div className="p-3.5 rounded-2xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs">
+                                    {resolveError}
+                                </div>
+                            )}
+
+                            {verifyingCard ? (
+                                <div className="py-12 text-center text-neutral-400 text-sm animate-pulse">
+                                    Evaluating card patterns against called numbers...
+                                </div>
+                            ) : verificationData ? (
+                                <div className="space-y-6">
+                                    {/* Status Banner */}
+                                    <div className={`p-4 rounded-2xl border ${
+                                        verificationData.is_valid
+                                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                                            : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                                    }`}>
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-2xl">{verificationData.is_valid ? '🎉' : '❌'}</span>
+                                            <div>
+                                                <div className="font-black text-sm">
+                                                    {verificationData.is_valid ? 'VALID WINNING BINGO!' : 'NOT A WINNING CARD'}
+                                                </div>
+                                                <div className="text-xs mt-0.5 opacity-90">
+                                                    {verificationData.is_valid ? (
+                                                        <span>
+                                                            Completed {verificationData.completed_count} pattern(s):{' '}
+                                                            <strong>{verificationData.completed_patterns?.map(p => p.name).join(', ') || 'Winning Line'}</strong>
+                                                        </span>
+                                                    ) : (
+                                                        <span>{verificationData.reason || 'Pattern requirements not satisfied yet.'}</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* 5x5 Grid Visualization */}
+                                    {verificationData.grid && (
+                                        <div>
+                                            <div className="text-xs font-bold text-neutral-400 uppercase tracking-wider mb-2 text-center">
+                                                Card Grid (Called numbers highlighted, winning pattern glowing)
+                                            </div>
+                                            <div className="max-w-xs mx-auto bg-neutral-950 p-3 rounded-2xl border border-neutral-800 shadow-inner">
+                                                <div className="grid grid-cols-5 gap-1.5 text-center mb-1.5">
+                                                    {['B', 'I', 'N', 'G', 'O'].map((letter, idx) => (
+                                                        <div key={letter} className={`text-xs font-black py-1 rounded-lg ${
+                                                            ['bg-rose-500/20 text-rose-400', 'bg-amber-500/20 text-amber-400', 'bg-emerald-500/20 text-emerald-400', 'bg-sky-500/20 text-sky-400', 'bg-purple-500/20 text-purple-400'][idx]
+                                                        }`}>
+                                                            {letter}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div className="grid grid-cols-5 gap-1.5">
+                                                    {verificationData.grid.map((row, rIdx) =>
+                                                        row.map((cell, cIdx) => {
+                                                            const isCenter = rIdx === 2 && cIdx === 2;
+                                                            const isMarked = isCenter || (verificationData.marked_grid && verificationData.marked_grid[rIdx]?.[cIdx]);
+                                                            
+                                                            // Check if this cell is part of any completed winning pattern
+                                                            const isWinningCell = verificationData.completed_patterns?.some(p => 
+                                                                p.coordinates?.some((coord: any) => coord[0] === rIdx && coord[1] === cIdx)
+                                                            );
+
+                                                            return (
+                                                                <div
+                                                                    key={`${rIdx}-${cIdx}`}
+                                                                    className={`aspect-square rounded-xl flex flex-col items-center justify-center font-bold text-xs transition border select-none ${
+                                                                        isWinningCell
+                                                                            ? 'bg-amber-400 text-neutral-950 border-amber-300 ring-2 ring-amber-400/50 shadow-md font-black'
+                                                                            : isMarked
+                                                                            ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300 font-extrabold'
+                                                                            : 'bg-neutral-900 border-neutral-800 text-neutral-400'
+                                                                    }`}
+                                                                >
+                                                                    <span>{isCenter ? '★ FREE' : cell}</span>
+                                                                    {isWinningCell && !isCenter && (
+                                                                        <span className="text-[7px] leading-none uppercase tracking-tighter opacity-80 font-black">WIN</span>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Prize Info */}
+                                    <div className="bg-neutral-950 p-4 rounded-2xl border border-neutral-800 flex items-center justify-between text-xs">
+                                        <span className="text-neutral-400">Total Prize Payout:</span>
+                                        <span className="text-base font-black text-emerald-400">
+                                            ${((verificationData.estimated_payout || 0) / 100).toFixed(2)}
+                                        </span>
+                                    </div>
+
+                                    {/* Action Buttons */}
+                                    <div className="flex flex-col sm:flex-row justify-end gap-2.5 pt-4 border-t border-neutral-800">
+                                        <button
+                                            type="button"
+                                            onClick={() => setVerificationModalOpen(false)}
+                                            className="px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold"
+                                        >
+                                            Close
+                                        </button>
+
+                                        {/* If verifying a pending winner claim */}
+                                        {verificationData.winner_id ? (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleRejectClaim}
+                                                    disabled={resolvingClaim}
+                                                    className="px-4 py-2.5 rounded-xl bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-700 font-bold text-xs transition disabled:opacity-50"
+                                                >
+                                                    {resolvingClaim ? 'Rejecting...' : 'Reject False Claim & Allow Resume'}
+                                                </button>
+                                                {verificationData.is_valid && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleConfirmClaim}
+                                                        disabled={resolvingClaim}
+                                                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition shadow-lg disabled:opacity-50 flex items-center gap-1.5"
+                                                    >
+                                                        <span>✓</span>
+                                                        <span>{resolvingClaim ? 'Finalizing...' : 'Confirm Valid Win & Finalize Game'}</span>
+                                                    </button>
+                                                )}
+                                            </>
+                                        ) : (
+                                            /* If inspecting a walk-in card */
+                                            verificationData.is_valid && (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleDeclareWalkInWinner}
+                                                    disabled={resolvingClaim}
+                                                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition shadow-lg disabled:opacity-50 flex items-center gap-1.5"
+                                                >
+                                                    <span>✓</span>
+                                                    <span>{resolvingClaim ? 'Finalizing...' : 'Declare Walk-in Winner & Finalize Game'}</span>
+                                                </button>
+                                            )
+                                        )}
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                )}
+
+                {/* Quick Card Lookup Modal */}
+                {lookupModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                        <div className="bg-neutral-900 border border-neutral-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+                            <div className="flex justify-between items-center pb-3 border-b border-neutral-800">
+                                <h3 className="text-sm font-bold text-white">Check Card for BINGO</h3>
+                                <button onClick={() => setLookupModalOpen(false)} className="text-neutral-400 hover:text-white text-lg">
+                                    &times;
+                                </button>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-neutral-300 mb-1.5">
+                                    Card Number
+                                </label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={lookupCardNumber}
+                                    onChange={(e) => setLookupCardNumber(e.target.value)}
+                                    placeholder="e.g. 5 or 42"
+                                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                                />
+                            </div>
+                            <div className="pt-2 flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setLookupModalOpen(false)}
+                                    className="px-3.5 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const num = parseInt(lookupCardNumber, 10);
+                                        if (!num) return;
+                                        setLookupModalOpen(false);
+                                        openVerifyModalForCard({ cardNumber: num });
+                                    }}
+                                    disabled={!lookupCardNumber}
+                                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs disabled:opacity-50"
+                                >
+                                    Verify Card
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </CompanyAdminLayout>
     );

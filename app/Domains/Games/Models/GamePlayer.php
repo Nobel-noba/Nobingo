@@ -18,6 +18,7 @@ class GamePlayer extends Model
     protected $fillable = [
         'game_id',
         'user_id',
+        'guest_identifier',
         'entry_fee_paid',
         'joined_at',
     ];
@@ -51,6 +52,22 @@ class GamePlayer extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Check if player is a walk-in (offline) cash player.
+     */
+    public function isWalkIn(): bool
+    {
+        return $this->user_id === null;
+    }
+
+    /**
+     * Display name of player.
+     */
+    public function displayName(): string
+    {
+        return $this->user?->name ?? $this->guest_identifier ?? 'Walk-in Player';
     }
 
     /**

@@ -46,21 +46,28 @@ export default function PlayerLayout({
                                 >
                                     Bingo Lobby
                                 </Link>
-                                <span className="px-3 py-2 text-sm font-semibold text-slate-500 cursor-not-allowed">
-                                    My Cards (Phase 2)
-                                </span>
+                                <Link
+                                    href={`/c/${companySlug}/wallet`}
+                                    className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-slate-800 text-slate-200 hover:text-white transition"
+                                >
+                                    Wallet & Ledger
+                                </Link>
                             </div>
                         </div>
 
                         {/* Balance and User Profile */}
                         <div className="hidden sm:flex items-center space-x-4">
                             {/* Wallet Balance Pill */}
-                            <div className="flex items-center bg-slate-900/90 border border-slate-700/80 rounded-full px-3.5 py-1.5 shadow-inner">
-                                <span className="text-xs font-semibold text-slate-400 mr-2">Wallet:</span>
+                            <Link
+                                href={`/c/${companySlug}/wallet`}
+                                className="flex items-center bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 hover:border-emerald-500/50 rounded-full px-3.5 py-1.5 shadow-inner transition cursor-pointer group"
+                                title="Manage Wallet & View Transactions"
+                            >
+                                <span className="text-xs font-semibold text-slate-400 mr-2 group-hover:text-slate-300">Wallet:</span>
                                 <span className="text-sm font-black text-emerald-400 tracking-tight">
                                     {auth.user?.formatted_balance ?? '$0.00'}
                                 </span>
-                            </div>
+                            </Link>
 
                             <div className="text-right">
                                 <div className="text-sm font-bold text-slate-200">{auth.user?.name}</div>
@@ -108,6 +115,18 @@ export default function PlayerLayout({
                             className="block px-3 py-2 rounded-lg text-base font-semibold text-white hover:bg-slate-800"
                         >
                             Player Hub
+                        </Link>
+                        <Link
+                            href={`/c/${companySlug}/lobby`}
+                            className="block px-3 py-2 rounded-lg text-base font-semibold text-slate-300 hover:text-white hover:bg-slate-800"
+                        >
+                            Bingo Lobby
+                        </Link>
+                        <Link
+                            href={`/c/${companySlug}/wallet`}
+                            className="block px-3 py-2 rounded-lg text-base font-semibold text-slate-300 hover:text-white hover:bg-slate-800"
+                        >
+                            Wallet & Ledger
                         </Link>
                         <div className="pt-2 border-t border-slate-800 flex justify-between items-center">
                             <span className="text-sm text-slate-400">{auth.user?.name}</span>

@@ -3,6 +3,7 @@
 namespace App\Domains\Games\Models;
 
 use App\Domains\Tenancy\Traits\BelongsToCompany;
+use App\Domains\Winners\Models\GameWinner;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -41,7 +42,7 @@ class Game extends Model
         self::STATUS_OPEN => [self::STATUS_STARTING, self::STATUS_ACTIVE, self::STATUS_CANCELLED],
         self::STATUS_STARTING => [self::STATUS_ACTIVE, self::STATUS_CANCELLED],
         self::STATUS_ACTIVE => [self::STATUS_PAUSED, self::STATUS_COMPLETED, self::STATUS_CANCELLED],
-        self::STATUS_PAUSED => [self::STATUS_ACTIVE, self::STATUS_CANCELLED],
+        self::STATUS_PAUSED => [self::STATUS_ACTIVE, self::STATUS_COMPLETED, self::STATUS_CANCELLED],
         self::STATUS_COMPLETED => [],
         self::STATUS_CANCELLED => [],
     ];
@@ -68,6 +69,13 @@ class Game extends Model
         'winner_policy',
         'prize_configuration',
         'created_by',
+        'total_pot',
+        'winner_payout_total',
+        'house_gross_cut',
+        'platform_fee',
+        'company_net_cut',
+        'winner_share_percentage',
+        'platform_share_percentage',
     ];
 
     /**
@@ -86,6 +94,13 @@ class Game extends Model
             'ended_at' => 'datetime',
             'call_interval' => 'integer',
             'prize_configuration' => 'array',
+            'total_pot' => 'integer',
+            'winner_payout_total' => 'integer',
+            'house_gross_cut' => 'integer',
+            'platform_fee' => 'integer',
+            'company_net_cut' => 'integer',
+            'winner_share_percentage' => 'float',
+            'platform_share_percentage' => 'float',
         ];
     }
 
@@ -201,8 +216,31 @@ class Game extends Model
         return $this->status === self::STATUS_ACTIVE;
     }
 
+    public function isPaused(): bool
+    {
+        return $this->status === self::STATUS_PAUSED;
+    }
+
     public function isCompleted(): bool
     {
         return $this->status === self::STATUS_COMPLETED;
+    }
+
+    /**
+     * Verified winners for this game.
+     *
+     * @return HasMany<GameWinner, $this>
+     */
+    public function winners(): HasMany
+    {
+        return $this->hasMany(GameWinner::class);
+    }
+
+    /**
+     * Check if game has at least one verified winner.
+     */
+    public function hasWinner(): bool
+    {
+        return $this->winners()->exists();
     }
 }
