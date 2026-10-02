@@ -11,6 +11,7 @@ export interface User {
     is_company_admin: boolean;
     is_game_manager: boolean;
     is_player: boolean;
+    must_reset_password?: boolean;
 }
 
 export interface Tenant {

@@ -31,20 +31,12 @@ export default function Welcome({ auth, companies }: Props) {
                                     Go to Dashboard &rarr;
                                 </Link>
                             ) : (
-                                <>
-                                    <Link
-                                        href={route('login')}
-                                        className="text-slate-300 hover:text-white text-xs font-semibold px-3 py-2 rounded-lg transition"
-                                    >
-                                        Log In
-                                    </Link>
-                                    <Link
-                                        href={route('register')}
-                                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition shadow-sm"
-                                    >
-                                        Register
-                                    </Link>
-                                </>
+                                <Link
+                                    href={route('login')}
+                                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition shadow-sm"
+                                >
+                                    Sign In
+                                </Link>
                             )}
                         </div>
                     </div>

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Platform;
 
+use App\Domains\Audit\Models\AuditLog;
 use App\Domains\Auth\Models\Role;
 use App\Domains\Auth\Services\EmailVerificationService;
 use App\Domains\Cards\Models\BingoCard;
@@ -174,6 +175,12 @@ class PlatformDashboardController extends Controller
             ->whereHas('roles', fn ($q) => $q->where('slug', Role::COMPANY_ADMIN))
             ->get();
 
+        $completedGames = Game::withoutGlobalScopes()->where('company_id', $company->id)->where('status', Game::STATUS_COMPLETED);
+        $totalPots = (int) (clone $completedGames)->sum('total_pot');
+        $totalWinners = (int) (clone $completedGames)->sum('winner_payout_total');
+        $totalHouseGross = (int) (clone $completedGames)->sum('house_gross_cut');
+        $totalPlatformRevenue = (int) (clone $completedGames)->sum('platform_fee');
+
         $stats = [
             'total_cards' => BingoCard::withoutGlobalScopes()->where('company_id', $company->id)->count(),
             'available_cards' => BingoCard::withoutGlobalScopes()
@@ -189,21 +196,93 @@ class PlatformDashboardController extends Controller
                 ->whereHas('roles', fn ($q) => $q->where('slug', Role::PLAYER))
                 ->count(),
             'total_transactions_volume' => (int) Transaction::where('company_id', $company->id)->sum('amount'),
+            'credit_balance' => (int) $company->credit_balance,
+            'formatted_credit_balance' => $company->formattedCreditBalance(),
+            'total_pots' => $totalPots,
+            'formatted_total_pots' => '$'.number_format($totalPots / 100, 2),
+            'total_winner_payouts' => $totalWinners,
+            'formatted_winner_payouts' => '$'.number_format($totalWinners / 100, 2),
+            'total_house_gross' => $totalHouseGross,
+            'formatted_house_gross' => '$'.number_format($totalHouseGross / 100, 2),
+            'total_platform_revenue' => $totalPlatformRevenue,
+            'formatted_platform_revenue' => '$'.number_format($totalPlatformRevenue / 100, 2),
         ];
 
         $recentGames = Game::withoutGlobalScopes()
             ->where('company_id', $company->id)
             ->withCount('players')
             ->latest()
-            ->take(8)
+            ->take(10)
             ->get();
+
+        $auditLogs = AuditLog::where('company_id', $company->id)
+            ->with('user:id,name,email')
+            ->latest('id')
+            ->take(15)
+            ->get()
+            ->map(fn (AuditLog $log) => [
+                'id' => $log->id,
+                'action' => $log->action,
+                'description' => $log->description,
+                'user' => $log->user ? [
+                    'id' => $log->user->id,
+                    'name' => $log->user->name,
+                    'email' => $log->user->email,
+                ] : null,
+                'created_at' => $log->created_at->format('M d, Y H:i:s'),
+            ]);
 
         return Inertia::render('Platform/CompanyShow', [
             'company' => $company,
             'admins' => $admins,
             'stats' => $stats,
             'recent_games' => $recentGames,
+            'audit_logs' => $auditLogs,
         ]);
+    }
+
+    /**
+     * Directly allocate / top up platform credits for a rented company tenant.
+     */
+    public function topupCompanyCredits(Company $company, Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'amount' => ['required', 'numeric', 'min:1', 'max:100000'],
+            'notes' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $amountInCents = (int) round(((float) $validated['amount']) * 100);
+
+        $balanceBefore = (int) $company->credit_balance;
+        $balanceAfter = $balanceBefore + $amountInCents;
+        $company->update(['credit_balance' => $balanceAfter]);
+
+        Transaction::create([
+            'company_id' => $company->id,
+            'user_id' => null,
+            'type' => Transaction::TYPE_CREDIT_PURCHASE,
+            'amount' => $amountInCents,
+            'currency' => 'USD',
+            'status' => Transaction::STATUS_COMPLETED,
+            'balance_before' => $balanceBefore,
+            'balance_after' => $balanceAfter,
+            'reference_code' => 'TOPUP-'.strtoupper(bin2hex(random_bytes(4))),
+            'description' => 'Platform Owner Direct Credit Top-up: '.($validated['notes'] ?? 'Manual credit allocation'),
+        ]);
+
+        AuditLog::create([
+            'company_id' => $company->id,
+            'user_id' => $request->user()?->id,
+            'action' => AuditLog::ACTION_BALANCE_ADJUSTED,
+            'description' => "Platform Owner directly credited {$company->name} balance with \${$validated['amount']}.00. Notes: ".($validated['notes'] ?? 'None'),
+            'details' => [
+                'amount' => $amountInCents,
+                'notes' => $validated['notes'] ?? null,
+            ],
+            'created_at' => now(),
+        ]);
+
+        return redirect()->back()->with('success', "Successfully allocated \${$validated['amount']}.00 platform credits to {$company->name}.");
     }
 
     /**

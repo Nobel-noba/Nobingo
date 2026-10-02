@@ -52,6 +52,7 @@ class HandleInertiaRequests extends Middleware
                     'is_company_admin' => $user->isCompanyAdmin(),
                     'is_game_manager' => $user->isGameManager(),
                     'is_player' => $user->isPlayer(),
+                    'must_reset_password' => $user->mustResetPassword(),
                 ] : null,
             ],
             'tenant' => $activeCompany ? [

@@ -19,9 +19,16 @@ class AuditLogController extends Controller
         $action = $request->query('action');
         $search = $request->query('search');
 
+        $user = $request->user();
+        $isGameManagerOnly = $user->isGameManager() && ! $user->isCompanyAdmin() && ! $user->isPlatformOwner();
+
         $query = AuditLog::where('company_id', $company->id)
             ->with('user:id,name,email')
             ->latest('id');
+
+        if ($isGameManagerOnly) {
+            $query->where('user_id', $user->id);
+        }
 
         if ($action && $action !== 'ALL') {
             $query->where('action', $action);

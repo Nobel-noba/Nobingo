@@ -5,6 +5,7 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Domains\Auth\Traits\HasRoles;
 use App\Domains\Financial\Models\Transaction;
+use App\Domains\Games\Models\Game;
 use App\Domains\Tenancy\Models\Company;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -15,7 +16,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-#[Fillable(['name', 'email', 'password', 'company_id', 'balance', 'status'])]
+#[Fillable(['name', 'email', 'password', 'company_id', 'balance', 'status', 'must_reset_password'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -33,6 +34,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'balance' => 'integer',
+            'must_reset_password' => 'boolean',
         ];
     }
 
@@ -68,5 +70,21 @@ class User extends Authenticatable
     public function transactions(): HasMany
     {
         return $this->hasMany(Transaction::class);
+    }
+
+    /**
+     * Games created/managed by this user.
+     */
+    public function createdGames(): HasMany
+    {
+        return $this->hasMany(Game::class, 'created_by');
+    }
+
+    /**
+     * Whether the user must reset their password on next login.
+     */
+    public function mustResetPassword(): bool
+    {
+        return (bool) ($this->must_reset_password ?? false);
     }
 }

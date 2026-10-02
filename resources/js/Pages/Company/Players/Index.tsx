@@ -38,12 +38,30 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
     const [search, setSearch] = useState(filters.search || '');
     const [selectedStatus, setSelectedStatus] = useState(filters.status || 'all');
     const [adjustingPlayer, setAdjustingPlayer] = useState<PlayerItem | null>(null);
+    const [registerModalOpen, setRegisterModalOpen] = useState(false);
+    const [resetPassPlayer, setResetPassPlayer] = useState<PlayerItem | null>(null);
 
     const adjustForm = useForm({
         amount: 10,
         is_credit: true,
         reason: 'Administrative courtesy',
     });
+
+    const registerForm = useForm({
+        name: '',
+        email: '',
+        password: '',
+        initial_deposit: 0,
+    });
+
+    const resetPassForm = useForm({
+        password: '',
+    });
+
+    const generateRandomPassword = () => {
+        const pass = 'Bingo' + Math.floor(1000 + Math.random() * 9000) + '!';
+        return pass;
+    };
 
     const handleFilter = (statusVal: string, searchVal: string) => {
         router.get(
@@ -75,6 +93,29 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
         });
     };
 
+    const handleRegisterSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        registerForm.post(`/c/${company.slug}/admin/players`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setRegisterModalOpen(false);
+                registerForm.reset();
+            },
+        });
+    };
+
+    const handleResetPassSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!resetPassPlayer) return;
+        resetPassForm.post(`/c/${company.slug}/admin/players/${resetPassPlayer.id}/reset-password`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setResetPassPlayer(null);
+                resetPassForm.reset();
+            },
+        });
+    };
+
     return (
         <CompanyAdminLayout>
             <Head title={`Player Management - ${company.name}`} />
@@ -85,9 +126,24 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
                     <div>
                         <h1 className="text-2xl font-bold text-white tracking-tight">Player Directory & Moderation</h1>
                         <p className="text-sm text-neutral-400 mt-1">
-                            Manage user accounts, monitor gameplay metrics, modify status, and adjust wallet balances.
+                            Register new players, issue temporary credentials, manage account status, and perform adjustments.
                         </p>
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            registerForm.setData({
+                                name: '',
+                                email: '',
+                                password: generateRandomPassword(),
+                                initial_deposit: 0,
+                            });
+                            setRegisterModalOpen(true);
+                        }}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md flex items-center gap-2 transition self-start sm:self-auto cursor-pointer"
+                    >
+                        <span>+ Register New Player</span>
+                    </button>
                 </div>
 
                 {/* Filter & Search Bar */}
@@ -194,6 +250,16 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
                                                     className="text-xs bg-indigo-950/60 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/60 px-2.5 py-1 rounded transition"
                                                 >
                                                     Adjust $
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        setResetPassPlayer(player);
+                                                        resetPassForm.setData('password', generateRandomPassword());
+                                                    }}
+                                                    className="text-xs bg-amber-950/60 hover:bg-amber-900 text-amber-300 border border-amber-700/60 px-2.5 py-1 rounded transition"
+                                                    title="Set temporary password"
+                                                >
+                                                    Reset Pass
                                                 </button>
                                                 <button
                                                     onClick={() => handleToggleStatus(player.id)}
@@ -325,6 +391,183 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
                                     className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition shadow"
                                 >
                                     {adjustForm.processing ? 'Processing...' : 'Save Adjustment'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Register New Player Modal */}
+            {registerModalOpen && (
+                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+                        <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
+                            <h3 className="font-bold text-white text-base flex items-center gap-2">
+                                <span>👤</span>
+                                <span>Register New Player Account</span>
+                            </h3>
+                            <button
+                                onClick={() => setRegisterModalOpen(false)}
+                                className="text-neutral-400 hover:text-white text-xs font-bold"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300">
+                            <strong>Note:</strong> Public self-registration is closed. Players are provisioned here with temporary credentials and will be prompted to set a new personal password on first login.
+                        </div>
+
+                        <form onSubmit={handleRegisterSubmit} className="space-y-4 text-xs">
+                            <div>
+                                <label className="block uppercase font-bold text-neutral-400 mb-1">Full Name</label>
+                                <input
+                                    type="text"
+                                    required
+                                    placeholder="e.g. John Doe"
+                                    value={registerForm.data.name}
+                                    onChange={(e) => registerForm.setData('name', e.target.value)}
+                                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:ring-emerald-500 focus:border-emerald-500"
+                                />
+                                {registerForm.errors.name && (
+                                    <div className="text-rose-400 text-[11px] mt-1">{registerForm.errors.name}</div>
+                                )}
+                            </div>
+
+                            <div>
+                                <label className="block uppercase font-bold text-neutral-400 mb-1">Email Address</label>
+                                <input
+                                    type="email"
+                                    required
+                                    placeholder="player@example.com"
+                                    value={registerForm.data.email}
+                                    onChange={(e) => registerForm.setData('email', e.target.value)}
+                                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:ring-emerald-500 focus:border-emerald-500"
+                                />
+                                {registerForm.errors.email && (
+                                    <div className="text-rose-400 text-[11px] mt-1">{registerForm.errors.email}</div>
+                                )}
+                            </div>
+
+                            <div>
+                                <div className="flex justify-between items-center mb-1">
+                                    <label className="block uppercase font-bold text-neutral-400">Temporary Password</label>
+                                    <button
+                                        type="button"
+                                        onClick={() => registerForm.setData('password', generateRandomPassword())}
+                                        className="text-[11px] text-emerald-400 hover:text-emerald-300 underline font-semibold"
+                                    >
+                                        Generate Random
+                                    </button>
+                                </div>
+                                <input
+                                    type="text"
+                                    required
+                                    value={registerForm.data.password}
+                                    onChange={(e) => registerForm.setData('password', e.target.value)}
+                                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-emerald-500 focus:border-emerald-500"
+                                />
+                                {registerForm.errors.password && (
+                                    <div className="text-rose-400 text-[11px] mt-1">{registerForm.errors.password}</div>
+                                )}
+                            </div>
+
+                            <div>
+                                <label className="block uppercase font-bold text-neutral-400 mb-1">Initial Cash Deposit ($ USD, optional)</label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="50000"
+                                    step="0.01"
+                                    value={registerForm.data.initial_deposit}
+                                    onChange={(e) => registerForm.setData('initial_deposit', parseFloat(e.target.value) || 0)}
+                                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-emerald-500 focus:border-emerald-500"
+                                    placeholder="0.00"
+                                />
+                            </div>
+
+                            <div className="flex justify-end space-x-2 pt-2 border-t border-neutral-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setRegisterModalOpen(false)}
+                                    className="px-4 py-2 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-800"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={registerForm.processing}
+                                    className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 transition shadow"
+                                >
+                                    {registerForm.processing ? 'Registering...' : 'Register Player'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Reset Password Modal */}
+            {resetPassPlayer && (
+                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+                        <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
+                            <h3 className="font-bold text-white text-base flex items-center gap-2">
+                                <span>🔑</span>
+                                <span>Reset Temporary Password</span>
+                            </h3>
+                            <button
+                                onClick={() => setResetPassPlayer(null)}
+                                className="text-neutral-400 hover:text-white text-xs font-bold"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="text-xs text-neutral-300">
+                            Resetting password for: <strong className="text-white">{resetPassPlayer.name}</strong> ({resetPassPlayer.email}).
+                            The player will be required to change this password upon their next login.
+                        </div>
+
+                        <form onSubmit={handleResetPassSubmit} className="space-y-4 text-xs">
+                            <div>
+                                <div className="flex justify-between items-center mb-1">
+                                    <label className="block uppercase font-bold text-neutral-400">New Temporary Password</label>
+                                    <button
+                                        type="button"
+                                        onClick={() => resetPassForm.setData('password', generateRandomPassword())}
+                                        className="text-[11px] text-amber-400 hover:text-amber-300 underline font-semibold"
+                                    >
+                                        Generate
+                                    </button>
+                                </div>
+                                <input
+                                    type="text"
+                                    required
+                                    value={resetPassForm.data.password}
+                                    onChange={(e) => resetPassForm.setData('password', e.target.value)}
+                                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-amber-500 focus:border-amber-500"
+                                />
+                                {resetPassForm.errors.password && (
+                                    <div className="text-rose-400 text-[11px] mt-1">{resetPassForm.errors.password}</div>
+                                )}
+                            </div>
+
+                            <div className="flex justify-end space-x-2 pt-2 border-t border-neutral-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setResetPassPlayer(null)}
+                                    className="px-4 py-2 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-800"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={resetPassForm.processing}
+                                    className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-amber-600 hover:bg-amber-500 transition shadow"
+                                >
+                                    {resetPassForm.processing ? 'Updating...' : 'Set Temporary Password'}
                                 </button>
                             </div>
                         </form>

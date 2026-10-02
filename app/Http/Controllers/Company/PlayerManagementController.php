@@ -14,6 +14,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -224,5 +225,89 @@ class PlayerManagementController extends Controller
         );
 
         return back()->with('success', "Wallet balance for {$player->name} updated successfully.");
+    }
+
+    /**
+     * Register a new player account by Game Manager or Company Admin.
+     */
+    public function store(Request $request, Company $company): RedirectResponse
+    {
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
+            'password' => ['required', 'string', 'min:6', 'max:100'],
+            'initial_deposit' => ['nullable', 'numeric', 'min:0', 'max:50000'],
+        ]);
+
+        $player = User::create([
+            'name' => $validated['name'],
+            'email' => $validated['email'],
+            'password' => Hash::make($validated['password']),
+            'company_id' => $company->id,
+            'status' => 'active',
+            'balance' => 0,
+            'must_reset_password' => true,
+        ]);
+
+        $playerRole = Role::firstOrCreate(
+            ['slug' => Role::PLAYER],
+            ['name' => 'Player', 'description' => 'Bingo player participating in live game sessions.']
+        );
+        $player->roles()->sync([$playerRole->id]);
+
+        $initialDeposit = (float) ($validated['initial_deposit'] ?? 0);
+        if ($initialDeposit > 0) {
+            $amountInCents = (int) round($initialDeposit * 100);
+            $this->ledgerService->recordDeposit(
+                $player,
+                $amountInCents,
+                referenceCode: 'INIT-'.bin2hex(random_bytes(4)),
+                description: 'Initial deposit upon counter registration'
+            );
+        }
+
+        $this->auditLogger->log(
+            AuditLog::ACTION_PLAYER_ACTIVATED,
+            $player,
+            "Operator registered new player {$player->name} ({$player->email}) with temporary password.",
+            [
+                'player_id' => $player->id,
+                'initial_deposit' => $initialDeposit,
+                'must_reset_password' => true,
+            ]
+        );
+
+        return back()->with('success', "Player {$player->name} successfully registered. They will be prompted to set a new password upon first login.");
+    }
+
+    /**
+     * Reset a player's password to a temporary password by Game Manager or Company Admin.
+     */
+    public function resetPassword(Request $request, Company $company, User $player): RedirectResponse
+    {
+        if ((int) $player->company_id !== (int) $company->id) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'password' => ['required', 'string', 'min:6', 'max:100'],
+        ]);
+
+        $player->forceFill([
+            'password' => Hash::make($validated['password']),
+            'must_reset_password' => true,
+        ])->save();
+
+        $this->auditLogger->log(
+            AuditLog::ACTION_PLAYER_ACTIVATED,
+            $player,
+            "Operator reset password for player {$player->name} ({$player->email}).",
+            [
+                'player_id' => $player->id,
+                'must_reset_password' => true,
+            ]
+        );
+
+        return back()->with('success', "Temporary password set for {$player->name}. They must change it upon their next login.");
     }
 }

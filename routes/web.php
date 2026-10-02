@@ -9,6 +9,7 @@ use App\Http\Controllers\Company\CompanyDepositRequestController;
 use App\Http\Controllers\Company\CompanyPaymentAccountController;
 use App\Http\Controllers\Company\GameAuditController;
 use App\Http\Controllers\Company\GameManagementController;
+use App\Http\Controllers\Company\GameManagerController;
 use App\Http\Controllers\Company\LedgerManagementController;
 use App\Http\Controllers\Company\PatternManagementController;
 use App\Http\Controllers\Company\PlayerManagementController;
@@ -76,6 +77,7 @@ Route::middleware(['auth', 'role:PLATFORM_OWNER'])
         Route::get('/companies/{company}', [PlatformDashboardController::class, 'showCompany'])->name('companies.show');
         Route::patch('/companies/{company}/settings', [PlatformDashboardController::class, 'updateCompanySettings'])->name('companies.settings');
         Route::patch('/companies/{company}/status', [PlatformDashboardController::class, 'toggleCompanyStatus'])->name('companies.status');
+        Route::post('/companies/{company}/topup-credits', [PlatformDashboardController::class, 'topupCompanyCredits'])->name('companies.topup-credits');
         Route::post('/companies/{company}/users/{user}/password-direct', [PlatformDashboardController::class, 'directChangeAdminPassword'])->name('companies.users.password-direct');
         Route::post('/companies/{company}/users/{user}/request-password-reset', [PlatformDashboardController::class, 'requestAdminPasswordReset'])->name('companies.users.request-password-reset');
         Route::post('/companies/{company}/users/{user}/confirm-password-reset', [PlatformDashboardController::class, 'confirmAdminPasswordReset'])->name('companies.users.confirm-password-reset');
@@ -105,23 +107,12 @@ Route::middleware(['auth', 'role:PLATFORM_OWNER'])
 Route::get('/platform/verify-email/{user}', [PlatformDashboardController::class, 'verifyEmail'])
     ->name('platform.verify-email');
 
-// Company Administration Routes
+// Company Shared Administration Routes (Company Admin, Game Manager, Platform Owner)
 Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN,GAME_MANAGER'])
     ->prefix('c/{company:slug}/admin')
     ->name('company.admin.')
     ->group(function () {
         Route::get('/', [CompanyDashboardController::class, 'index'])->name('dashboard');
-
-        // Fixed Card Inventory (Phase 2)
-        Route::get('/cards', [CardManagementController::class, 'index'])->name('cards.index');
-        Route::get('/cards/{card}', [CardManagementController::class, 'show'])->name('cards.show');
-        Route::post('/cards/generate-batch', [CardManagementController::class, 'generateBatch'])->name('cards.generate-batch');
-        Route::patch('/cards/{card}/status', [CardManagementController::class, 'updateStatus'])->name('cards.update-status');
-
-        // Winning Patterns (Phase 3)
-        Route::get('/patterns', [PatternManagementController::class, 'index'])->name('patterns.index');
-        Route::post('/patterns', [PatternManagementController::class, 'store'])->name('patterns.store');
-        Route::patch('/patterns/{pattern}/toggle', [PatternManagementController::class, 'toggle'])->name('patterns.toggle');
 
         // Bingo Games (Phase 4 & 5)
         Route::get('/games', [GameManagementController::class, 'index'])->name('games.index');
@@ -137,19 +128,54 @@ Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN,GAME_MAN
         Route::post('/games/{game}/declare-walkin-winner', [GameManagementController::class, 'declareWalkInWinner'])->name('games.declare-walkin-winner');
         Route::get('/games/{game}/audit', [GameAuditController::class, 'show'])->name('games.audit');
 
+        // Player Directory & Counter Operations
+        Route::get('/players', [PlayerManagementController::class, 'index'])->name('players.index');
+        Route::post('/players', [PlayerManagementController::class, 'store'])->name('players.store');
+        Route::get('/players/{player}', [PlayerManagementController::class, 'show'])->name('players.show');
+        Route::patch('/players/{player}/toggle-status', [PlayerManagementController::class, 'toggleStatus'])->name('players.toggle-status');
+        Route::post('/players/{player}/adjust-balance', [PlayerManagementController::class, 'adjustBalance'])->name('players.adjust-balance');
+        Route::post('/players/{player}/reset-password', [PlayerManagementController::class, 'resetPassword'])->name('players.reset-password');
+
+        // Player Deposit Requests & Manual Cashier
+        Route::get('/deposit-requests', [CompanyDepositRequestController::class, 'index'])->name('deposit-requests.index');
+        Route::post('/deposit-requests/{depositRequest}/approve', [CompanyDepositRequestController::class, 'approve'])->name('deposit-requests.approve');
+        Route::post('/deposit-requests/{depositRequest}/reject', [CompanyDepositRequestController::class, 'reject'])->name('deposit-requests.reject');
+        Route::post('/players/manual-deposit', [CompanyDepositRequestController::class, 'manualDeposit'])->name('players.manual-deposit');
+
+        // Winners Ledger
+        Route::get('/winners', [WinnerManagementController::class, 'index'])->name('winners.index');
+
+        // Tenant Audit Logs (Personal logs for Game Manager, all logs for Admin)
+        Route::get('/audit-logs', [AuditLogController::class, 'index'])->name('audit-logs.index');
+    });
+
+// Company Executive Administration Routes (Restricted to Company Admin & Platform Owner)
+Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN'])
+    ->prefix('c/{company:slug}/admin')
+    ->name('company.admin.')
+    ->group(function () {
+        // Game Managers Management
+        Route::get('/game-managers', [GameManagerController::class, 'index'])->name('game-managers.index');
+        Route::post('/game-managers', [GameManagerController::class, 'store'])->name('game-managers.store');
+        Route::patch('/game-managers/{gameManager}', [GameManagerController::class, 'update'])->name('game-managers.update');
+        Route::post('/game-managers/{gameManager}/reset-password', [GameManagerController::class, 'resetPassword'])->name('game-managers.reset-password');
+        Route::delete('/game-managers/{gameManager}', [GameManagerController::class, 'destroy'])->name('game-managers.destroy');
+
+        // Fixed Card Inventory (Phase 2)
+        Route::get('/cards', [CardManagementController::class, 'index'])->name('cards.index');
+        Route::get('/cards/{card}', [CardManagementController::class, 'show'])->name('cards.show');
+        Route::post('/cards/generate-batch', [CardManagementController::class, 'generateBatch'])->name('cards.generate-batch');
+        Route::patch('/cards/{card}/status', [CardManagementController::class, 'updateStatus'])->name('cards.update-status');
+
+        // Winning Patterns (Phase 3)
+        Route::get('/patterns', [PatternManagementController::class, 'index'])->name('patterns.index');
+        Route::post('/patterns', [PatternManagementController::class, 'store'])->name('patterns.store');
+        Route::patch('/patterns/{pattern}/toggle', [PatternManagementController::class, 'toggle'])->name('patterns.toggle');
+
         // Game Templates (Phase 9)
         Route::get('/templates', [TemplateManagementController::class, 'index'])->name('templates.index');
         Route::post('/templates', [TemplateManagementController::class, 'store'])->name('templates.store');
         Route::patch('/templates/{template}/toggle', [TemplateManagementController::class, 'toggle'])->name('templates.toggle');
-
-        // Player Directory & Moderation (Phase 9)
-        Route::get('/players', [PlayerManagementController::class, 'index'])->name('players.index');
-        Route::get('/players/{player}', [PlayerManagementController::class, 'show'])->name('players.show');
-        Route::patch('/players/{player}/toggle-status', [PlayerManagementController::class, 'toggleStatus'])->name('players.toggle-status');
-        Route::post('/players/{player}/adjust-balance', [PlayerManagementController::class, 'adjustBalance'])->name('players.adjust-balance');
-
-        // Winners Ledger (Phase 7)
-        Route::get('/winners', [WinnerManagementController::class, 'index'])->name('winners.index');
 
         // Treasury & Financial Ledger (Phase 8)
         Route::get('/ledger', [LedgerManagementController::class, 'index'])->name('ledger.index');
@@ -163,15 +189,6 @@ Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN,GAME_MAN
         Route::post('/payment-accounts', [CompanyPaymentAccountController::class, 'store'])->name('payment-accounts.store');
         Route::put('/payment-accounts/{paymentAccount}', [CompanyPaymentAccountController::class, 'update'])->name('payment-accounts.update');
         Route::delete('/payment-accounts/{paymentAccount}', [CompanyPaymentAccountController::class, 'destroy'])->name('payment-accounts.destroy');
-
-        // Player Deposit Requests & Manual Top-up
-        Route::get('/deposit-requests', [CompanyDepositRequestController::class, 'index'])->name('deposit-requests.index');
-        Route::post('/deposit-requests/{depositRequest}/approve', [CompanyDepositRequestController::class, 'approve'])->name('deposit-requests.approve');
-        Route::post('/deposit-requests/{depositRequest}/reject', [CompanyDepositRequestController::class, 'reject'])->name('deposit-requests.reject');
-        Route::post('/players/manual-deposit', [CompanyDepositRequestController::class, 'manualDeposit'])->name('players.manual-deposit');
-
-        // Tenant Audit Logs (Phase 9)
-        Route::get('/audit-logs', [AuditLogController::class, 'index'])->name('audit-logs.index');
 
         // Analytics & Reports (Phase 9)
         Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');

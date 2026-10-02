@@ -1,7 +1,7 @@
 import CompanyAdminLayout from '@/Layouts/CompanyAdminLayout';
 import { PageProps } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 interface GamePlayerItem {
     id: number;
@@ -145,6 +145,34 @@ export default function GameShow({
     const [liveGame, setLiveGame] = useState(game);
     const [liveBoard, setLiveBoard] = useState(master_board);
     const [liveRemaining, setLiveRemaining] = useState(remaining_count);
+
+    // Fullscreen Console Mode
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const gameConsoleRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setIsFullscreen(Boolean(document.fullscreenElement));
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+        };
+    }, []);
+
+    const toggleFullscreen = () => {
+        if (!document.fullscreenElement) {
+            if (gameConsoleRef.current?.requestFullscreen) {
+                gameConsoleRef.current.requestFullscreen();
+            } else if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen();
+            }
+        } else {
+            if (document.exitFullscreen) {
+                document.exitFullscreen();
+            }
+        }
+    };
 
     // Card Assignment Modal State
     const [assignModalOpen, setAssignModalOpen] = useState(false);
@@ -577,13 +605,64 @@ export default function GameShow({
                         >
                             Audit & Replay
                         </Link>
+
+                        <button
+                            type="button"
+                            onClick={toggleFullscreen}
+                            className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                            title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen Live Console'}
+                        >
+                            <span>{isFullscreen ? '✕' : '⛶'}</span>
+                            <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
+                        </button>
                     </div>
                 </div>
             }
         >
             <Head title={`Game #${game.game_number}`} />
 
-            <div className="space-y-6">
+            <div
+                ref={gameConsoleRef}
+                className={`transition-all ${
+                    isFullscreen
+                        ? 'bg-neutral-950 p-4 sm:p-6 min-h-screen text-white flex flex-col justify-start space-y-4'
+                        : 'space-y-5'
+                }`}
+            >
+                {/* Fullscreen Dedicated Operator Bar */}
+                {isFullscreen && (
+                    <div className="bg-neutral-900/95 border border-neutral-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-2xl sticky top-0 z-30 backdrop-blur-md">
+                        <div className="flex items-center space-x-3">
+                            <span className="font-mono text-xs text-amber-400 font-black bg-amber-400/10 border border-amber-400/20 px-3 py-1.5 rounded-xl">
+                                Game #{game.game_number}
+                            </span>
+                            <span className="font-extrabold text-white text-base tracking-tight">{game.name}</span>
+                            <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                {liveGame.status}
+                            </span>
+                            <span className="text-xs text-neutral-400 font-mono">
+                                Pot: <strong className="text-emerald-400 font-bold">${((liveGame.entry_fee * (liveGame.players?.length || liveGame.cards?.length || 0)) / 100).toFixed(2)}</strong>
+                            </span>
+                        </div>
+
+                        <div className="flex items-center space-x-2">
+                            <button
+                                type="button"
+                                onClick={() => setLookupModalOpen(true)}
+                                className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold px-3.5 py-1.5 rounded-xl transition flex items-center gap-1.5 border border-neutral-700"
+                            >
+                                <span>🔍</span> Check Card
+                            </button>
+                            <button
+                                type="button"
+                                onClick={toggleFullscreen}
+                                className="bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 text-xs font-bold px-3.5 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                            >
+                                <span>✕</span> Exit Fullscreen
+                            </button>
+                        </div>
+                    </div>
+                )}
                 {/* Pending Bingo Claims Alert Banner */}
                 {pendingWinners.length > 0 && (
                     <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/20 via-yellow-500/20 to-amber-500/20 border-2 border-amber-500 text-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
@@ -614,7 +693,7 @@ export default function GameShow({
                     </div>
                 )}
                 {/* Company Credit Warning Banner */}
-                {((tenant as any)?.credit_balance ?? 0) <= 0 && ['draft', 'open'].includes(liveGame.status) && (
+                {!isFullscreen && ((tenant as any)?.credit_balance ?? 0) <= 0 && ['draft', 'open'].includes(liveGame.status) && (
                     <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-md">
                         <div className="flex items-center gap-3">
                             <span className="text-2xl">⚠️</span>
@@ -634,137 +713,283 @@ export default function GameShow({
                     </div>
                 )}
 
-                {/* Master Ball Calling Console */}
-                <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-xl">
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-neutral-800">
-                        {/* Jumbo Current Ball */}
-                        <div className="flex items-center space-x-6">
-                            <div className="relative">
-                                {latestCall ? (
-                                    <div className={`w-24 h-24 rounded-full bg-gradient-to-tr ${getLetterColor(latestCall.letter)} flex flex-col items-center justify-center shadow-2xl border-4 ring-4 ring-white/10 animate-bounce`}>
-                                        <span className="text-sm font-black tracking-widest uppercase opacity-90">{latestCall.letter}</span>
-                                        <span className="text-3xl font-extrabold leading-none">{latestCall.ball_number}</span>
+                {/* Caller Console: Fullscreen Arena (20% Current Draw + 80% Master Caller Board) or Standard Single-View Layout */}
+                {isFullscreen ? (
+                    <div className="flex-1 flex flex-col justify-between bg-neutral-900 border border-neutral-800 rounded-3xl p-4 sm:p-6 shadow-2xl">
+                        {/* 2-Column Split: Current Draw (20%) and Master Caller Board (80%) */}
+                        <div className="flex flex-col lg:flex-row gap-5 lg:gap-6 items-stretch flex-1">
+                            {/* Current Draw (Left ~20%) */}
+                            <div className="w-full lg:w-[20%] xl:w-[20%] shrink-0 flex flex-col justify-between bg-neutral-950/70 border border-neutral-800/80 rounded-2xl p-4 sm:p-5">
+                                <div className="flex flex-col items-center text-center space-y-4 my-auto">
+                                    <div className="text-xs font-bold text-neutral-400 uppercase tracking-widest">
+                                        Current Draw
                                     </div>
-                                ) : (
-                                    <div className="w-24 h-24 rounded-full bg-neutral-800 border-2 border-dashed border-neutral-700 flex flex-col items-center justify-center text-neutral-500 text-xs font-bold">
-                                        <span>NO BALL</span>
-                                        <span>CALLED</span>
+
+                                    {/* Jumbo Ball */}
+                                    <div className="relative">
+                                        {latestCall ? (
+                                            <div className={`w-28 h-28 sm:w-36 sm:h-36 lg:w-40 lg:h-40 xl:w-48 xl:h-48 rounded-full bg-gradient-to-tr ${getLetterColor(latestCall.letter)} flex flex-col items-center justify-center shadow-2xl border-4 ring-8 ring-white/10 animate-pulse`}>
+                                                <span className="text-sm sm:text-base font-black tracking-widest uppercase opacity-90">{latestCall.letter}</span>
+                                                <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black leading-none">{latestCall.ball_number}</span>
+                                            </div>
+                                        ) : (
+                                            <div className="w-28 h-28 sm:w-36 sm:h-36 lg:w-40 lg:h-40 xl:w-48 xl:h-48 rounded-full bg-neutral-950 border-2 border-dashed border-neutral-700 flex flex-col items-center justify-center text-neutral-500 text-sm font-bold">
+                                                <span>NO BALL</span>
+                                                <span>CALLED</span>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Draw Status */}
+                                    <div>
+                                        <div className="text-xl sm:text-2xl xl:text-3xl font-black text-white">
+                                            {latestCall ? `${latestCall.letter}-${latestCall.ball_number}` : 'Awaiting Call'}
+                                        </div>
+                                        <div className="text-xs sm:text-sm text-neutral-400 mt-2 flex flex-col items-center gap-1 font-mono">
+                                            <span>Drawn: <strong className="text-white font-mono">#{liveGame.calls?.length || 0} / 75</strong></span>
+                                            <span>Remaining: <strong className="text-amber-400 font-mono">{liveRemaining}</strong></span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Caller Controls */}
+                                {liveGame.status === 'active' && (
+                                    <div className="flex flex-col gap-2 pt-4 border-t border-neutral-800/80 mt-4">
+                                        <button
+                                            onClick={handleCallNext}
+                                            disabled={calling || liveRemaining === 0}
+                                            className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 font-black px-4 py-3 rounded-xl shadow-lg shadow-amber-500/20 text-sm flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                        >
+                                            <span>{calling ? 'Drawing...' : 'Call Next Ball'}</span>
+                                            <span className="text-[10px] bg-neutral-950/20 px-1.5 py-0.5 rounded font-mono">1..75</span>
+                                        </button>
+
+                                        <button
+                                            onClick={() => setAutoCallActive(!autoCallActive)}
+                                            className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 border whitespace-nowrap cursor-pointer ${
+                                                autoCallActive
+                                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                                                    : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                                            }`}
+                                        >
+                                            <span className={`w-2 h-2 rounded-full ${autoCallActive ? 'bg-rose-400 animate-ping' : 'bg-neutral-500'}`} />
+                                            <span>{autoCallActive ? 'Stop Auto-Call' : `Auto-Call (${liveGame.call_interval}s)`}</span>
+                                        </button>
                                     </div>
                                 )}
                             </div>
 
-                            <div>
-                                <div className="text-xs font-bold text-neutral-400 uppercase tracking-wider">
-                                    Current Draw
+                            {/* Master Caller Board (Right ~80%) */}
+                            <div className="w-full lg:w-[80%] xl:w-[80%] flex-1 flex flex-col justify-between bg-neutral-950/80 border border-neutral-800/80 rounded-2xl p-4 sm:p-5 shadow-inner">
+                                <div className="flex justify-between items-center mb-3 sm:mb-4 px-1">
+                                    <span className="text-xs sm:text-sm font-bold text-neutral-400 uppercase tracking-wider">
+                                        Master Caller Board (1–75)
+                                    </span>
+                                    <span className="text-xs text-amber-400 font-mono font-bold bg-amber-500/10 px-3 py-1 rounded-lg border border-amber-500/20">
+                                        {liveGame.calls?.length || 0} / 75 Drawn
+                                    </span>
                                 </div>
-                                <div className="text-2xl font-black text-white mt-1">
-                                    {latestCall ? `${latestCall.letter}-${latestCall.ball_number}` : 'Awaiting First Ball'}
+
+                                <div className="space-y-2 sm:space-y-3 flex-1 flex flex-col justify-around">
+                                    {['B', 'I', 'N', 'G', 'O'].map((letter) => {
+                                        const rowNumbers = liveBoard?.[letter] || [];
+                                        return (
+                                            <div key={letter} className="flex items-center gap-2 sm:gap-3 w-full">
+                                                {/* Letter Badge */}
+                                                <div className={`w-10 h-10 sm:w-12 sm:h-12 lg:w-14 lg:h-14 xl:w-16 xl:h-16 rounded-xl flex items-center justify-center font-black text-base sm:text-xl lg:text-2xl shrink-0 border ${
+                                                    letter === 'B' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' :
+                                                    letter === 'I' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' :
+                                                    letter === 'N' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+                                                    letter === 'G' ? 'bg-sky-500/20 text-sky-400 border-sky-500/30' :
+                                                    'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                                                }`}>
+                                                    {letter}
+                                                </div>
+
+                                                {/* 15 Compact Square Number Cells side by side */}
+                                                <div className="grid grid-cols-15 gap-1 sm:gap-1.5 lg:gap-2 flex-1 w-full">
+                                                    {rowNumbers.map((cell) => (
+                                                        <div
+                                                            key={cell.number}
+                                                            title={cell.is_called ? `Ball #${cell.number} (Call #${cell.sequence_index})` : `Ball #${cell.number} (Uncalled)`}
+                                                            className={`h-10 sm:h-12 lg:h-14 xl:h-16 rounded-xl flex items-center justify-center text-sm sm:text-base lg:text-xl xl:text-2xl font-black select-none transition ${
+                                                                cell.is_called
+                                                                    ? 'bg-amber-400 text-neutral-950 font-black shadow-lg ring-2 ring-amber-300 scale-105 z-10'
+                                                                    : 'bg-neutral-900/90 text-neutral-300 border border-neutral-800/90 hover:border-neutral-700'
+                                                            }`}
+                                                        >
+                                                            {cell.number}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
-                                <div className="text-xs text-neutral-400 mt-1 flex items-center space-x-3">
-                                    <span>Sequence: <strong className="text-white">#{liveGame.calls?.length || 0} / 75</strong></span>
-                                    <span>&bull;</span>
-                                    <span>Remaining: <strong className="text-amber-400">{liveRemaining}</strong></span>
-                                </div>
-                            </div>
-                        </div>
 
-                        {/* Caller Controls */}
-                        {liveGame.status === 'active' && (
-                            <div className="flex flex-wrap items-center gap-3">
-                                <button
-                                    onClick={handleCallNext}
-                                    disabled={calling || liveRemaining === 0}
-                                    className="bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 font-black px-6 py-3 rounded-2xl shadow-lg shadow-amber-500/20 text-sm flex items-center space-x-2 transition"
-                                >
-                                    <span>{calling ? 'Drawing Ball...' : 'Call Next Ball'}</span>
-                                    <span className="text-xs bg-neutral-950/20 px-2 py-0.5 rounded-full font-mono">1..75</span>
-                                </button>
-
-                                <button
-                                    onClick={() => setAutoCallActive(!autoCallActive)}
-                                    className={`px-5 py-3 rounded-2xl text-xs font-bold transition flex items-center space-x-2 border ${
-                                        autoCallActive
-                                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
-                                            : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
-                                    }`}
-                                >
-                                    <span className={`w-2 h-2 rounded-full ${autoCallActive ? 'bg-rose-400 animate-ping' : 'bg-neutral-500'}`} />
-                                    <span>{autoCallActive ? 'Stop Auto-Call' : `Auto-Call (${liveGame.call_interval}s)`}</span>
-                                </button>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Master Caller Board (75 Ball Matrix) */}
-                    <div className="mt-6">
-                        <div className="flex justify-between items-center mb-3">
-                            <h3 className="text-xs font-bold text-neutral-400 uppercase tracking-wider">
-                                Master Caller Board (1–75)
-                            </h3>
-                            <span className="text-xs text-neutral-500 font-mono">
-                                Server Authoritative CSPRNG
-                            </span>
-                        </div>
-
-                        <div className="space-y-2">
-                            {['B', 'I', 'N', 'G', 'O'].map((letter) => {
-                                const rowNumbers = liveBoard?.[letter] || [];
-                                return (
-                                    <div key={letter} className="flex items-center space-x-2">
-                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-xs border ${
-                                            letter === 'B' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' :
-                                            letter === 'I' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' :
-                                            letter === 'N' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
-                                            letter === 'G' ? 'bg-sky-500/20 text-sky-400 border-sky-500/30' :
-                                            'bg-purple-500/20 text-purple-400 border-purple-500/30'
-                                        }`}>
-                                            {letter}
-                                        </div>
-
-                                        <div className="flex-1 grid grid-cols-15 gap-1">
-                                            {rowNumbers.map((cell) => (
+                                {/* Fullscreen Recent Calls Ticker */}
+                                {liveGame.calls && liveGame.calls.length > 0 && (
+                                    <div className="mt-4 pt-3 border-t border-neutral-800 flex items-center gap-2 overflow-x-auto py-1">
+                                        <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider shrink-0">
+                                            Recent Calls:
+                                        </span>
+                                        <div className="flex items-center gap-2 flex-nowrap">
+                                            {liveGame.calls.slice(-18).reverse().map((call) => (
                                                 <div
-                                                    key={cell.number}
-                                                    title={cell.is_called ? `Called #${cell.sequence_index}` : `Uncalled #${cell.number}`}
-                                                    className={`h-8 rounded-lg flex items-center justify-center font-bold text-xs transition select-none ${
-                                                        cell.is_called
-                                                            ? 'bg-amber-400 text-neutral-950 shadow-sm font-black scale-105 ring-1 ring-amber-300'
-                                                            : 'bg-neutral-950/70 border border-neutral-800 text-neutral-500'
-                                                    }`}
+                                                    key={call.id}
+                                                    className="bg-neutral-900 border border-neutral-800 px-2.5 py-1 rounded-xl text-xs flex items-center space-x-1.5 shrink-0"
                                                 >
-                                                    {cell.number}
+                                                    <span className="text-neutral-500 font-mono text-[10px]">#{call.sequence_index}</span>
+                                                    <span className="font-extrabold text-white">{call.letter}-{call.ball_number}</span>
                                                 </div>
                                             ))}
                                         </div>
                                     </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-
-                    {/* Recent Calls Feed */}
-                    {liveGame.calls && liveGame.calls.length > 0 && (
-                        <div className="mt-6 pt-4 border-t border-neutral-800">
-                            <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider block mb-2">
-                                Recent Calls Ticker
-                            </span>
-                            <div className="flex flex-wrap items-center gap-2">
-                                {liveGame.calls.slice(-12).reverse().map((call) => (
-                                    <div
-                                        key={call.id}
-                                        className="bg-neutral-950 border border-neutral-800 px-3 py-1 rounded-xl text-xs flex items-center space-x-2"
-                                    >
-                                        <span className="text-neutral-500 font-mono">#{call.sequence_index}</span>
-                                        <span className="font-extrabold text-white">{call.letter}-{call.ball_number}</span>
-                                    </div>
-                                ))}
+                                )}
                             </div>
                         </div>
-                    )}
-                </div>
+                    </div>
+                ) : (
+                    /* Standard Compact Master Ball Calling Console (Single-View Layout) */
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-4 sm:p-5 shadow-xl">
+                        <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
+                            {/* Call Station / Left Deck (xl:col-span-4) */}
+                            <div className="xl:col-span-4 flex flex-col justify-between space-y-4">
+                                <div className="flex items-center space-x-4">
+                                    {/* Jumbo Ball */}
+                                    <div className="relative shrink-0">
+                                        {latestCall ? (
+                                            <div className={`w-20 h-20 sm:w-22 sm:h-22 rounded-full bg-gradient-to-tr ${getLetterColor(latestCall.letter)} flex flex-col items-center justify-center shadow-2xl border-4 ring-4 ring-white/10 animate-bounce`}>
+                                                <span className="text-xs font-black tracking-widest uppercase opacity-90">{latestCall.letter}</span>
+                                                <span className="text-2xl sm:text-3xl font-extrabold leading-none">{latestCall.ball_number}</span>
+                                            </div>
+                                        ) : (
+                                            <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-full bg-neutral-950 border-2 border-dashed border-neutral-700 flex flex-col items-center justify-center text-neutral-500 text-xs font-bold">
+                                                <span>NO BALL</span>
+                                                <span>CALLED</span>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Draw Status */}
+                                    <div>
+                                        <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                                            Current Draw
+                                        </div>
+                                        <div className="text-xl sm:text-2xl font-black text-white mt-0.5">
+                                            {latestCall ? `${latestCall.letter}-${latestCall.ball_number}` : 'Awaiting Call'}
+                                        </div>
+                                        <div className="text-xs text-neutral-400 mt-1 flex flex-wrap items-center gap-2">
+                                            <span>Drawn: <strong className="text-white font-mono">#{liveGame.calls?.length || 0}/75</strong></span>
+                                            <span className="text-neutral-600">&bull;</span>
+                                            <span>Remaining: <strong className="text-amber-400 font-mono">{liveRemaining}</strong></span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Caller Controls */}
+                                {liveGame.status === 'active' && (
+                                    <div className="flex items-center gap-2 pt-1">
+                                        <button
+                                            onClick={handleCallNext}
+                                            disabled={calling || liveRemaining === 0}
+                                            className="flex-1 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 font-black px-4 py-2.5 rounded-xl shadow-lg shadow-amber-500/20 text-xs sm:text-sm flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                        >
+                                            <span>{calling ? 'Drawing...' : 'Call Next Ball'}</span>
+                                            <span className="text-[10px] bg-neutral-950/20 px-1.5 py-0.5 rounded font-mono">1..75</span>
+                                        </button>
+
+                                        <button
+                                            onClick={() => setAutoCallActive(!autoCallActive)}
+                                            className={`px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 border whitespace-nowrap cursor-pointer ${
+                                                autoCallActive
+                                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                                                    : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                                            }`}
+                                        >
+                                            <span className={`w-2 h-2 rounded-full ${autoCallActive ? 'bg-rose-400 animate-ping' : 'bg-neutral-500'}`} />
+                                            <span>{autoCallActive ? 'Stop Auto' : `Auto (${liveGame.call_interval}s)`}</span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Compact 75-Ball Matrix Board (xl:col-span-8) */}
+                            <div className="xl:col-span-8 flex justify-center xl:justify-start overflow-x-auto py-1">
+                                <div className="w-fit bg-neutral-950/80 border border-neutral-800/80 rounded-2xl p-3 sm:p-3.5 shadow-inner">
+                                    <div className="flex justify-between items-center mb-2 px-1 gap-4">
+                                        <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">
+                                            Master Caller Board (1–75)
+                                        </span>
+                                        <span className="text-[10px] text-amber-400/90 font-mono font-bold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                            {liveGame.calls?.length || 0} / 75 Drawn
+                                        </span>
+                                    </div>
+
+                                    <div className="space-y-1.5 w-fit">
+                                        {['B', 'I', 'N', 'G', 'O'].map((letter) => {
+                                            const rowNumbers = liveBoard?.[letter] || [];
+                                            return (
+                                                <div key={letter} className="flex items-center space-x-1 sm:space-x-1.5 w-fit">
+                                                    {/* Letter Badge */}
+                                                    <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center font-black text-xs sm:text-sm shrink-0 border ${
+                                                        letter === 'B' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' :
+                                                        letter === 'I' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' :
+                                                        letter === 'N' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+                                                        letter === 'G' ? 'bg-sky-500/20 text-sky-400 border-sky-500/30' :
+                                                        'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                                                    }`}>
+                                                        {letter}
+                                                    </div>
+
+                                                    {/* 15 Compact Square Number Cells side by side */}
+                                                    <div className="flex items-center space-x-1 sm:space-x-1.5 w-fit">
+                                                        {rowNumbers.map((cell) => (
+                                                            <div
+                                                                key={cell.number}
+                                                                title={cell.is_called ? `Ball #${cell.number} (Call #${cell.sequence_index})` : `Ball #${cell.number} (Uncalled)`}
+                                                                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-xs sm:text-sm font-black select-none transition shrink-0 ${
+                                                                    cell.is_called
+                                                                        ? 'bg-amber-400 text-neutral-950 font-black shadow-md ring-2 ring-amber-300 scale-105 z-10'
+                                                                        : 'bg-neutral-900/90 text-neutral-300 border border-neutral-800/90 hover:border-neutral-700'
+                                                                }`}
+                                                            >
+                                                                {cell.number}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Compact Recent Calls Ticker */}
+                        {liveGame.calls && liveGame.calls.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-neutral-800 flex items-center gap-2 overflow-x-auto py-0.5">
+                                <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider shrink-0">
+                                    Recent Calls:
+                                </span>
+                                <div className="flex items-center gap-1.5 flex-nowrap">
+                                    {liveGame.calls.slice(-14).reverse().map((call) => (
+                                        <div
+                                            key={call.id}
+                                            className="bg-neutral-950 border border-neutral-800 px-2 py-0.5 rounded-lg text-[11px] flex items-center space-x-1 shrink-0"
+                                        >
+                                            <span className="text-neutral-500 font-mono text-[9px]">#{call.sequence_index}</span>
+                                            <span className="font-extrabold text-white">{call.letter}-{call.ball_number}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Verified Winners Banner */}
-                {liveGame.winners && liveGame.winners.length > 0 && (
+                {!isFullscreen && liveGame.winners && liveGame.winners.length > 0 && (
                     <div className="bg-gradient-to-r from-amber-950/40 via-neutral-900 to-amber-950/40 border-2 border-amber-500/50 rounded-3xl p-6 shadow-xl shadow-amber-500/10 mb-6">
                         <div className="flex items-center space-x-3 mb-4">
                             <span className="text-3xl">🏆</span>
@@ -818,7 +1043,8 @@ export default function GameShow({
                     </div>
                 )}
 
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {!isFullscreen && (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                     {/* Left Column: Room Overview & Configuration Snapshot */}
                     <div className="lg:col-span-4 space-y-6">
                         {/* Game Rules Card */}
@@ -914,9 +1140,9 @@ export default function GameShow({
                                 </div>
                             </div>
 
-                            <div className="overflow-x-auto">
+                            <div className="overflow-x-auto max-h-[380px] overflow-y-auto rounded-2xl border border-neutral-800/80">
                                 <table className="min-w-full divide-y divide-neutral-800 text-sm">
-                                    <thead className="bg-neutral-950/60 text-neutral-400 text-xs uppercase tracking-wider text-left">
+                                    <thead className="bg-neutral-950 sticky top-0 z-10 text-neutral-400 text-xs uppercase tracking-wider text-left border-b border-neutral-800">
                                         <tr>
                                             <th className="px-4 py-3 font-semibold">Player</th>
                                             <th className="px-4 py-3 font-semibold">Assigned Fixed Card</th>
@@ -1025,6 +1251,7 @@ export default function GameShow({
                         </div>
                     </div>
                 </div>
+                )}
 
                 {/* Specific Card Assignment Modal */}
                 {assignModalOpen && (

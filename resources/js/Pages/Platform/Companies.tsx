@@ -222,7 +222,7 @@ export default function PlatformCompanies({ companies, filters }: Props) {
                                     href={`/platform/companies/${company.id}`}
                                     className="flex-1 text-center bg-rose-600/15 hover:bg-rose-600/25 text-rose-300 border border-rose-500/30 text-xs font-bold py-2 rounded-xl transition"
                                 >
-                                    Manage Installation
+                                    Manage Installation &rarr;
                                 </Link>
                                 <button
                                     onClick={() => toggleStatus(company)}
@@ -234,25 +234,6 @@ export default function PlatformCompanies({ companies, filters }: Props) {
                                 >
                                     {company.status === 'active' ? 'Suspend' : 'Restore'}
                                 </button>
-                            </div>
-
-                            <div className="flex gap-2">
-                                <a
-                                    href={`/c/${company.slug}/admin`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="flex-1 text-center bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs font-medium py-1.5 rounded-lg transition"
-                                >
-                                    Admin View &nearr;
-                                </a>
-                                <a
-                                    href={`/c/${company.slug}/lobby`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="flex-1 text-center bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs font-medium py-1.5 rounded-lg transition"
-                                >
-                                    Player Lobby &nearr;
-                                </a>
                             </div>
                         </div>
                     </div>

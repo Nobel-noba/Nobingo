@@ -22,6 +22,18 @@ interface RecentGame {
     started_at: string | null;
 }
 
+interface AuditLogItem {
+    id: number;
+    action: string;
+    description: string;
+    user?: {
+        id: number;
+        name: string;
+        email: string;
+    } | null;
+    created_at: string;
+}
+
 interface Props extends PageProps {
     company: Tenant & {
         domain?: string | null;
@@ -36,15 +48,33 @@ interface Props extends PageProps {
         active_games: number;
         total_players: number;
         total_transactions_volume: number;
+        credit_balance?: number;
+        formatted_credit_balance?: string;
+        total_pots?: number;
+        formatted_total_pots?: string;
+        total_winner_payouts?: number;
+        formatted_winner_payouts?: string;
+        total_house_gross?: number;
+        formatted_house_gross?: string;
+        total_platform_revenue?: number;
+        formatted_platform_revenue?: string;
     };
     recent_games: RecentGame[];
+    audit_logs?: AuditLogItem[];
 }
 
-export default function CompanyShow({ company, admins, stats, recent_games }: Props) {
+export default function CompanyShow({ company, admins, stats, recent_games, audit_logs = [] }: Props) {
     const [selectedAdmin, setSelectedAdmin] = useState<AdminUser | null>(null);
     const [showDirectPasswordModal, setShowDirectPasswordModal] = useState(false);
     const [showOtpResetModal, setShowOtpResetModal] = useState(false);
+    const [showTopupModal, setShowTopupModal] = useState(false);
     const [otpSentMessage, setOtpSentMessage] = useState<string | null>(null);
+
+    // Form for Direct Credit Top-up
+    const topupForm = useForm({
+        amount: 100,
+        notes: '',
+    });
 
     // Form for Settings Update
     const { data: settingsData, setData: setSettingsData, patch: patchSettings, processing: processingSettings } = useForm({
@@ -120,6 +150,16 @@ export default function CompanyShow({ company, admins, stats, recent_games }: Pr
         });
     };
 
+    const submitTopup: FormEventHandler = (e) => {
+        e.preventDefault();
+        topupForm.post(`/platform/companies/${company.id}/topup-credits`, {
+            onSuccess: () => {
+                setShowTopupModal(false);
+                topupForm.reset();
+            },
+        });
+    };
+
     return (
         <PlatformOwnerLayout
             header={
@@ -156,21 +196,47 @@ export default function CompanyShow({ company, admins, stats, recent_games }: Pr
                         >
                             {company.status === 'active' ? 'Revoke Company Access (Suspend)' : 'Restore Company Access'}
                         </button>
-                        <a
-                            href={`/c/${company.slug}/admin`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold px-3.5 py-2 rounded-xl border border-slate-700 transition"
+                        <button
+                            type="button"
+                            onClick={() => {
+                                topupForm.reset();
+                                setShowTopupModal(true);
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer"
                         >
-                            View Company Console &nearr;
-                        </a>
+                            <span>💳</span> Direct Credit Top-up
+                        </button>
                     </div>
                 </div>
             }
         >
             <Head title={`Manage ${company.name}`} />
 
-            {/* Metrics Overview Cards */}
+            {/* Financial Overview Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div className="bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-5 shadow-sm">
+                    <p className="text-xs uppercase font-bold text-emerald-400">Platform Credit Balance</p>
+                    <p className="text-2xl font-black text-white mt-1">{stats.formatted_credit_balance || '$0.00'}</p>
+                    <p className="text-[11px] text-slate-400 mt-1">Tenant operating credit pool</p>
+                </div>
+                <div className="bg-slate-900/90 border border-rose-500/30 rounded-2xl p-5 shadow-sm">
+                    <p className="text-xs uppercase font-bold text-rose-400">Platform Commission</p>
+                    <p className="text-2xl font-black text-white mt-1">{stats.formatted_platform_revenue || '$0.00'}</p>
+                    <p className="text-[11px] text-slate-400 mt-1">Fees collected from house cuts</p>
+                </div>
+                <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                    <p className="text-xs uppercase font-bold text-slate-500">Total Pots Played</p>
+                    <p className="text-2xl font-black text-white mt-1">{stats.formatted_total_pots || '$0.00'}</p>
+                    <p className="text-[11px] text-slate-400 mt-1">All completed game pots</p>
+                </div>
+                <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                    <p className="text-xs uppercase font-bold text-slate-500">Winner Payouts</p>
+                    <p className="text-2xl font-black text-white mt-1">{stats.formatted_winner_payouts || '$0.00'}</p>
+                    <p className="text-[11px] text-slate-400 mt-1">Total awarded to players</p>
+                </div>
+            </div>
+
+            {/* Operational Metrics Cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
                 <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
                     <p className="text-xs uppercase font-bold text-slate-500">Fixed Cards Buffer</p>
@@ -261,15 +327,13 @@ export default function CompanyShow({ company, admins, stats, recent_games }: Pr
                     {/* Recent Games */}
                     <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm">
                         <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-base font-bold text-white">Recent Bingo Games</h3>
-                            <a
-                                href={`/c/${company.slug}/admin/games`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-xs text-rose-400 hover:underline"
-                            >
-                                View All Games &rarr;
-                            </a>
+                            <div>
+                                <h3 className="text-base font-bold text-white">Recent Bingo Games</h3>
+                                <p className="text-xs text-slate-400">Live & completed games hosted by this company</p>
+                            </div>
+                            <span className="text-xs font-mono text-slate-500 bg-slate-800/80 px-2.5 py-1 rounded-lg">
+                                {recent_games.length} Recorded
+                            </span>
                         </div>
 
                         {recent_games.length === 0 ? (
@@ -300,6 +364,56 @@ export default function CompanyShow({ company, admins, stats, recent_games }: Pr
                                                 </td>
                                                 <td className="py-2.5 text-slate-300">{g.players_count}</td>
                                                 <td className="py-2.5 text-slate-300">${(g.entry_fee / 100).toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Tenant Audit Logs */}
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm">
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <h3 className="text-base font-bold text-white">Tenant Security & Activity Audit</h3>
+                                <p className="text-xs text-slate-400">Operational events logged for this company</p>
+                            </div>
+                            <span className="text-xs font-mono text-slate-500 bg-slate-800/80 px-2.5 py-1 rounded-lg">
+                                {audit_logs.length} Recent Events
+                            </span>
+                        </div>
+
+                        {audit_logs.length === 0 ? (
+                            <p className="text-xs text-slate-500 py-4">No audit logs recorded for this tenant yet.</p>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs">
+                                    <thead>
+                                        <tr className="border-b border-slate-800 text-slate-400">
+                                            <th className="pb-2 font-semibold">Action</th>
+                                            <th className="pb-2 font-semibold">Description</th>
+                                            <th className="pb-2 font-semibold">Actor</th>
+                                            <th className="pb-2 font-semibold">Date</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-800/60">
+                                        {audit_logs.map((log) => (
+                                            <tr key={log.id} className="hover:bg-slate-800/30">
+                                                <td className="py-2.5">
+                                                    <span className="font-mono text-[11px] font-semibold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded">
+                                                        {log.action}
+                                                    </span>
+                                                </td>
+                                                <td className="py-2.5 text-slate-300 max-w-xs truncate" title={log.description}>
+                                                    {log.description}
+                                                </td>
+                                                <td className="py-2.5 text-slate-400 text-[11px]">
+                                                    {log.user ? log.user.name : <span className="text-slate-600">System</span>}
+                                                </td>
+                                                <td className="py-2.5 text-slate-500 font-mono text-[11px] whitespace-nowrap">
+                                                    {new Date(log.created_at).toLocaleDateString()} {new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -515,6 +629,77 @@ export default function CompanyShow({ company, admins, stats, recent_games }: Pr
                                     className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition"
                                 >
                                     Verify OTP & Reset Password
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Direct Credit Top-up Modal */}
+            {showTopupModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <h3 className="text-base font-bold text-white">Direct Credit Top-up</h3>
+                                <p className="text-xs text-slate-400 mt-0.5">Allocate prepaid hosting credits to {company.name}</p>
+                            </div>
+                            <button onClick={() => setShowTopupModal(false)} className="text-slate-400 hover:text-white">&times;</button>
+                        </div>
+
+                        <form onSubmit={submitTopup} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                                    Credit Amount ($ USD) *
+                                </label>
+                                <div className="relative">
+                                    <span className="absolute left-3 top-2 text-slate-500 font-mono text-xs">$</span>
+                                    <input
+                                        type="number"
+                                        required
+                                        min="1"
+                                        step="0.01"
+                                        value={topupForm.data.amount}
+                                        onChange={(e) => topupForm.setData('amount', parseFloat(e.target.value) || 0)}
+                                        className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-7 pr-3 py-2 text-sm font-semibold text-white focus:outline-none focus:border-rose-500"
+                                    />
+                                </div>
+                                {topupForm.errors.amount && (
+                                    <span className="text-rose-400 text-[11px]">{topupForm.errors.amount}</span>
+                                )}
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                                    Reference / Administrative Notes (Optional)
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. Wire transfer confirmation, Owner grant"
+                                    value={topupForm.data.notes}
+                                    onChange={(e) => topupForm.setData('notes', e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
+                                />
+                                {topupForm.errors.notes && (
+                                    <span className="text-rose-400 text-[11px]">{topupForm.errors.notes}</span>
+                                )}
+                            </div>
+
+                            <div className="flex justify-end space-x-2 pt-3 border-t border-slate-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowTopupModal(false)}
+                                    className="px-3.5 py-2 text-xs text-slate-400 hover:text-white"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={topupForm.processing}
+                                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition"
+                                >
+                                    {topupForm.processing ? 'Allocating...' : 'Confirm Credit Top-up'}
                                 </button>
                             </div>
                         </form>

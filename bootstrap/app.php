@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\EnsureHasPermission;
 use App\Http\Middleware\EnsureHasRole;
+use App\Http\Middleware\EnsurePasswordNotExpired;
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\ResolveTenantContext;
 use Illuminate\Foundation\Application;
@@ -21,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->web(append: [
             HandleInertiaRequests::class,
             AddLinkHeadersForPreloadedAssets::class,
+            EnsurePasswordNotExpired::class,
         ]);
 
         $middleware->alias([
