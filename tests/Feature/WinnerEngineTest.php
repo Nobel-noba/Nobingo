@@ -6,7 +6,6 @@ use App\Domains\Cards\Services\BingoCardGenerator;
 use App\Domains\Cards\Services\BingoCardValidator;
 use App\Domains\Games\Models\Game;
 use App\Domains\Games\Models\GameCall;
-use App\Domains\Games\Models\GameCard;
 use App\Domains\Games\Models\GameTemplate;
 use App\Domains\Games\Services\CardAssignmentService;
 use App\Domains\Games\Services\GameLifecycleService;
@@ -68,7 +67,7 @@ class WinnerEngineTest extends TestCase
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
 
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Fetch row 0 numbers of assigned card
@@ -114,7 +113,7 @@ class WinnerEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Only call 2 numbers from row 0 (need 5 for a horizontal line)
@@ -151,7 +150,7 @@ class WinnerEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player1);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $player1->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player1);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Simulate 5 calls completing player1's line
@@ -181,7 +180,7 @@ class WinnerEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
 
         // Game is still OPEN, not ACTIVE
         $claimResult = $this->verificationService->claimBingo($game, $gameCard, $player);
@@ -202,10 +201,10 @@ class WinnerEngineTest extends TestCase
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
 
         $this->assignmentService->joinGame($game, $player1);
-        $card1 = GameCard::where('game_id', $game->id)->where('user_id', $player1->id)->firstOrFail();
+        $card1 = $this->assignmentService->assignCardToPlayer($game, $player1);
 
         $this->assignmentService->joinGame($game, $player2);
-        $card2 = GameCard::where('game_id', $game->id)->where('user_id', $player2->id)->firstOrFail();
+        $card2 = $this->assignmentService->assignCardToPlayer($game, $player2);
 
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
@@ -246,10 +245,10 @@ class WinnerEngineTest extends TestCase
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
 
         $this->assignmentService->joinGame($game, $player1);
-        $card1 = GameCard::where('game_id', $game->id)->where('user_id', $player1->id)->firstOrFail();
+        $card1 = $this->assignmentService->assignCardToPlayer($game, $player1);
 
         $this->assignmentService->joinGame($game, $player2);
-        $card2 = GameCard::where('game_id', $game->id)->where('user_id', $player2->id)->firstOrFail();
+        $card2 = $this->assignmentService->assignCardToPlayer($game, $player2);
 
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
@@ -295,7 +294,7 @@ class WinnerEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $card = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $card = $this->assignmentService->assignCardToPlayer($game, $player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         foreach ($card->version->grid[0] as $idx => $num) {
@@ -328,7 +327,7 @@ class WinnerEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $card = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $card = $this->assignmentService->assignCardToPlayer($game, $player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         foreach ($card->version->grid[0] as $idx => $num) {
@@ -373,7 +372,7 @@ class WinnerEngineTest extends TestCase
         ]);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $card = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $card = $this->assignmentService->assignCardToPlayer($game, $player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Call the first 4 numbers of row 0
@@ -415,7 +414,7 @@ class WinnerEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $card = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $card = $this->assignmentService->assignCardToPlayer($game, $player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         foreach ($card->version->grid[0] as $idx => $num) {
@@ -454,7 +453,7 @@ class WinnerEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $playerA);
-        $card = GameCard::where('game_id', $game->id)->where('user_id', $playerA->id)->firstOrFail();
+        $card = $this->assignmentService->assignCardToPlayer($game, $playerA);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Player B attempts to claim on Company A's game

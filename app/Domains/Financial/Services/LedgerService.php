@@ -5,6 +5,7 @@ namespace App\Domains\Financial\Services;
 use App\Domains\Financial\Events\TransactionCreated;
 use App\Domains\Financial\Models\Transaction;
 use App\Domains\Games\Models\Game;
+use App\Domains\Tenancy\Models\GameManagerPlayer;
 use App\Domains\Winners\Models\GameWinner;
 use App\Models\User;
 use DomainException;
@@ -41,6 +42,33 @@ class LedgerService
             /** @var User $lockedUser */
             $lockedUser = User::where('id', $user->id)->lockForUpdate()->firstOrFail();
 
+            // If the game is hosted by a game manager, check and deduct from the player's manager wallet
+            if ($game->created_by !== null) {
+                $manager = User::find($game->created_by);
+                if ($manager && $manager->isGameManager() && ! $manager->isCompanyAdmin()) {
+                    $gmPlayer = GameManagerPlayer::where('game_manager_id', $game->created_by)
+                        ->where('player_id', $user->id)
+                        ->lockForUpdate()
+                        ->first();
+
+                    $managerName = $manager->name;
+
+                    if (! $gmPlayer) {
+                        throw new \RuntimeException(
+                            "You must be authorized by host manager ({$managerName}) to join this game. Please ask the manager to add you to their roster."
+                        );
+                    }
+
+                    if ($gmPlayer->balance < $game->entry_fee) {
+                        throw new \RuntimeException(
+                            "Insufficient balance with manager {$managerName}. Required: {$game->formattedEntryFee()}, available: {$gmPlayer->formattedBalance()}. Please deposit funds with this manager to join."
+                        );
+                    }
+
+                    $gmPlayer->decrement('balance', $game->entry_fee);
+                }
+            }
+
             if ($lockedUser->balance < $game->entry_fee) {
                 throw new \RuntimeException(
                     "Insufficient wallet balance. Required: {$game->formattedEntryFee()}, available: {$lockedUser->formattedBalance()}."
@@ -55,6 +83,7 @@ class LedgerService
             $transaction = Transaction::create([
                 'company_id' => $game->company_id,
                 'user_id' => $user->id,
+                'game_manager_id' => $game->created_by,
                 'type' => Transaction::TYPE_ENTRY_FEE,
                 'amount' => $game->entry_fee,
                 'currency' => $game->currency ?? 'USD',
@@ -108,6 +137,20 @@ class LedgerService
             /** @var User $lockedUser */
             $lockedUser = User::where('id', $winner->user_id)->lockForUpdate()->firstOrFail();
 
+            // Credit winner's manager wallet if game was hosted by a manager
+            $game = $winner->game;
+            if ($game && $game->created_by !== null && $winner->user_id !== null) {
+                $gmPlayer = GameManagerPlayer::firstOrCreate(
+                    [
+                        'company_id' => $winner->company_id,
+                        'game_manager_id' => $game->created_by,
+                        'player_id' => $winner->user_id,
+                    ],
+                    ['balance' => 0]
+                );
+                $gmPlayer->increment('balance', $winner->payout_amount);
+            }
+
             $balanceBefore = $lockedUser->balance;
             $balanceAfter = $balanceBefore + $winner->payout_amount;
 
@@ -116,6 +159,7 @@ class LedgerService
             $transaction = Transaction::create([
                 'company_id' => $winner->company_id,
                 'user_id' => $winner->user_id,
+                'game_manager_id' => $winner->game?->created_by,
                 'type' => Transaction::TYPE_PRIZE,
                 'amount' => $winner->payout_amount,
                 'currency' => 'USD',
@@ -169,6 +213,7 @@ class LedgerService
             $transaction = Transaction::create([
                 'company_id' => $game->company_id,
                 'user_id' => $user->id,
+                'game_manager_id' => $game->created_by,
                 'type' => Transaction::TYPE_REFUND,
                 'amount' => $amount,
                 'currency' => $game->currency ?? 'USD',
@@ -190,15 +235,27 @@ class LedgerService
     /**
      * Record a wallet deposit transaction.
      */
-    public function recordDeposit(User $user, int $amount, ?string $referenceCode = null, ?string $description = null): Transaction
+    public function recordDeposit(User $user, int $amount, ?string $referenceCode = null, ?string $description = null, ?int $managerId = null): Transaction
     {
         if ($amount <= 0) {
             throw new InvalidArgumentException('Deposit amount must be greater than zero.');
         }
 
-        return DB::transaction(function () use ($user, $amount, $referenceCode, $description) {
+        return DB::transaction(function () use ($user, $amount, $referenceCode, $description, $managerId) {
             /** @var User $lockedUser */
             $lockedUser = User::where('id', $user->id)->lockForUpdate()->firstOrFail();
+
+            if ($managerId !== null) {
+                $gmPlayer = GameManagerPlayer::firstOrCreate(
+                    [
+                        'company_id' => $user->company_id,
+                        'game_manager_id' => $managerId,
+                        'player_id' => $user->id,
+                    ],
+                    ['balance' => 0]
+                );
+                $gmPlayer->increment('balance', $amount);
+            }
 
             $balanceBefore = $lockedUser->balance;
             $balanceAfter = $balanceBefore + $amount;
@@ -208,6 +265,7 @@ class LedgerService
             $transaction = Transaction::create([
                 'company_id' => $user->company_id,
                 'user_id' => $user->id,
+                'game_manager_id' => $managerId,
                 'type' => Transaction::TYPE_DEPOSIT,
                 'amount' => $amount,
                 'currency' => 'USD',
@@ -229,15 +287,31 @@ class LedgerService
      *
      * @throws DomainException
      */
-    public function recordWithdrawal(User $user, int $amount, ?string $referenceCode = null, ?string $description = null): Transaction
+    public function recordWithdrawal(User $user, int $amount, ?string $referenceCode = null, ?string $description = null, ?int $managerId = null): Transaction
     {
         if ($amount <= 0) {
             throw new InvalidArgumentException('Withdrawal amount must be greater than zero.');
         }
 
-        return DB::transaction(function () use ($user, $amount, $referenceCode, $description) {
+        return DB::transaction(function () use ($user, $amount, $referenceCode, $description, $managerId) {
             /** @var User $lockedUser */
             $lockedUser = User::where('id', $user->id)->lockForUpdate()->firstOrFail();
+
+            if ($managerId !== null) {
+                $gmPlayer = GameManagerPlayer::where('game_manager_id', $managerId)
+                    ->where('player_id', $user->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $gmPlayer || $gmPlayer->balance < $amount) {
+                    $avail = $gmPlayer ? $gmPlayer->formattedBalance() : '$0.00';
+                    throw new DomainException(
+                        'Insufficient funds with this game manager. Requested: $'.number_format($amount / 100, 2).", available: {$avail}."
+                    );
+                }
+
+                $gmPlayer->decrement('balance', $amount);
+            }
 
             if ($lockedUser->balance < $amount) {
                 throw new \RuntimeException(
@@ -253,6 +327,7 @@ class LedgerService
             $transaction = Transaction::create([
                 'company_id' => $user->company_id,
                 'user_id' => $user->id,
+                'game_manager_id' => $managerId,
                 'type' => Transaction::TYPE_WITHDRAWAL,
                 'amount' => $amount,
                 'currency' => 'USD',

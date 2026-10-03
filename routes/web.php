@@ -131,9 +131,11 @@ Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN,GAME_MAN
         // Player Directory & Counter Operations
         Route::get('/players', [PlayerManagementController::class, 'index'])->name('players.index');
         Route::post('/players', [PlayerManagementController::class, 'store'])->name('players.store');
+        Route::post('/players/authorize-existing', [PlayerManagementController::class, 'authorizeExisting'])->name('players.authorize-existing');
         Route::get('/players/{player}', [PlayerManagementController::class, 'show'])->name('players.show');
         Route::patch('/players/{player}/toggle-status', [PlayerManagementController::class, 'toggleStatus'])->name('players.toggle-status');
         Route::post('/players/{player}/adjust-balance', [PlayerManagementController::class, 'adjustBalance'])->name('players.adjust-balance');
+        Route::post('/players/{player}/withdraw', [PlayerManagementController::class, 'withdraw'])->name('players.withdraw');
         Route::post('/players/{player}/reset-password', [PlayerManagementController::class, 'resetPassword'])->name('players.reset-password');
 
         // Player Deposit Requests & Manual Cashier
@@ -145,8 +147,15 @@ Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN,GAME_MAN
         // Winners Ledger
         Route::get('/winners', [WinnerManagementController::class, 'index'])->name('winners.index');
 
+        // Treasury & Financial Ledger / Money Flows Monitor
+        Route::get('/ledger', [LedgerManagementController::class, 'index'])->name('ledger.index');
+        Route::get('/transactions', [LedgerManagementController::class, 'index'])->name('transactions.index');
+
         // Tenant Audit Logs (Personal logs for Game Manager, all logs for Admin)
         Route::get('/audit-logs', [AuditLogController::class, 'index'])->name('audit-logs.index');
+
+        // Analytics & Reports (Phase 9 & Walk-in / Cash Reports)
+        Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
     });
 
 // Company Executive Administration Routes (Restricted to Company Admin & Platform Owner)
@@ -177,9 +186,6 @@ Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN'])
         Route::post('/templates', [TemplateManagementController::class, 'store'])->name('templates.store');
         Route::patch('/templates/{template}/toggle', [TemplateManagementController::class, 'toggle'])->name('templates.toggle');
 
-        // Treasury & Financial Ledger (Phase 8)
-        Route::get('/ledger', [LedgerManagementController::class, 'index'])->name('ledger.index');
-
         // Company Platform Credits (Phase 8 & Multitenant Billing)
         Route::get('/credits', [CompanyCreditController::class, 'index'])->name('credits.index');
         Route::post('/credits/buy', [CompanyCreditController::class, 'store'])->name('credits.store');
@@ -189,9 +195,6 @@ Route::middleware(['auth', 'tenant', 'role:PLATFORM_OWNER,COMPANY_ADMIN'])
         Route::post('/payment-accounts', [CompanyPaymentAccountController::class, 'store'])->name('payment-accounts.store');
         Route::put('/payment-accounts/{paymentAccount}', [CompanyPaymentAccountController::class, 'update'])->name('payment-accounts.update');
         Route::delete('/payment-accounts/{paymentAccount}', [CompanyPaymentAccountController::class, 'destroy'])->name('payment-accounts.destroy');
-
-        // Analytics & Reports (Phase 9)
-        Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
     });
 
 // Player Tenant Routes

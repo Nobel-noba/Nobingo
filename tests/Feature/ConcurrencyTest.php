@@ -112,11 +112,10 @@ class ConcurrencyTest extends TestCase
 
         $this->lifecycleService->openGame($game);
         $this->assignmentService->joinGame($game, $this->playerA);
+        $cardA = $this->assignmentService->assignCardToPlayer($game, $this->playerA);
         $this->assignmentService->joinGame($game, $this->playerB);
+        $cardB = $this->assignmentService->assignCardToPlayer($game, $this->playerB);
         $this->lifecycleService->startGame($game);
-
-        $cardA = GameCard::where('game_id', $game->id)->where('user_id', $this->playerA->id)->firstOrFail();
-        $cardB = GameCard::where('game_id', $game->id)->where('user_id', $this->playerB->id)->firstOrFail();
 
         // Call numbers until cardA has a winning line
         $gridA = $cardA->version->grid;
@@ -167,11 +166,10 @@ class ConcurrencyTest extends TestCase
 
         $this->lifecycleService->openGame($game);
         $this->assignmentService->joinGame($game, $this->playerA);
+        $cardA = $this->assignmentService->assignCardToPlayer($game, $this->playerA);
         $this->assignmentService->joinGame($game, $this->playerB);
+        $cardB = $this->assignmentService->assignCardToPlayer($game, $this->playerB);
         $this->lifecycleService->startGame($game);
-
-        $cardA = GameCard::where('game_id', $game->id)->where('user_id', $this->playerA->id)->firstOrFail();
-        $cardB = GameCard::where('game_id', $game->id)->where('user_id', $this->playerB->id)->firstOrFail();
 
         // Call numbers that complete rows on both cards
         $gridA = $cardA->version->grid;
@@ -301,14 +299,16 @@ class ConcurrencyTest extends TestCase
         ]);
         $this->lifecycleService->openGame($game);
 
-        // Player 1 claims the only available card
+        // Player 1 joins and claims the only available card
         $gp1 = $this->assignmentService->joinGame($game, $user1);
         $this->assertInstanceOf(GamePlayer::class, $gp1);
+        $this->assignmentService->assignCardToPlayer($game, $user1);
 
-        // Player 2 attempts to join -> No cards remaining
+        // Player 2 attempts to claim card -> No cards remaining
         $failed = false;
         try {
             $this->assignmentService->joinGame($game, $user2);
+            $this->assignmentService->assignCardToPlayer($game, $user2);
         } catch (RuntimeException $e) {
             $failed = true;
             $this->assertStringContainsString('No available cards in company inventory', $e->getMessage());

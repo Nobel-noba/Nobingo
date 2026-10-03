@@ -52,13 +52,33 @@ class PrizeDistributionService
                 'paid_at' => now(),
             ]);
 
+            $transaction = null;
+            if ($winner->payout_amount > 0) {
+                $identifier = $winner->card?->guest_identifier ?? "Walk-in Winner (#{$winner->id})";
+                $transaction = Transaction::create([
+                    'company_id' => $winner->company_id,
+                    'user_id' => null,
+                    'game_manager_id' => $game->created_by,
+                    'type' => Transaction::TYPE_PRIZE,
+                    'amount' => $winner->payout_amount,
+                    'currency' => 'USD',
+                    'status' => Transaction::STATUS_COMPLETED,
+                    'balance_before' => 0,
+                    'balance_after' => 0,
+                    'reference_type' => GameWinner::class,
+                    'reference_id' => $winner->id,
+                    'reference_code' => "PRIZE-WALKIN-GW{$winner->id}",
+                    'description' => "Cash walk-in prize payout for Game #{$winner->game_id} ({$identifier})",
+                ]);
+            }
+
             try {
                 event(new PrizeDistributed($game, $winner, $winner->payout_amount));
             } catch (\Throwable $e) {
                 Log::warning("WebSocket broadcast skipped or failed for PrizeDistributed: {$e->getMessage()}");
             }
 
-            return null;
+            return $transaction;
         }
 
         $transaction = $this->ledgerService->recordPrizePayout($winner);

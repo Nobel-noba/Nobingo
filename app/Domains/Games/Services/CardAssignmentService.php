@@ -3,11 +3,13 @@
 namespace App\Domains\Games\Services;
 
 use App\Domains\Cards\Models\BingoCard;
+use App\Domains\Financial\Models\Transaction;
 use App\Domains\Financial\Services\LedgerService;
 use App\Domains\Games\Events\PlayerJoinedGame;
 use App\Domains\Games\Models\Game;
 use App\Domains\Games\Models\GameCard;
 use App\Domains\Games\Models\GamePlayer;
+use App\Domains\Tenancy\Models\GameManagerPlayer;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -61,21 +63,51 @@ class CardAssignmentService
                 throw new RuntimeException("Game room has reached maximum player capacity ({$lockedGame->max_players}).");
             }
 
+            // Verify manager roster authorization and balance check if hosted by a Game Manager
+            $creator = $lockedGame->creator ?? ($lockedGame->created_by ? User::find($lockedGame->created_by) : null);
+            $isHostedByManager = $creator && $creator->isGameManager() && ! $creator->isCompanyAdmin();
+
+            if ($isHostedByManager) {
+                $managerPlayer = GameManagerPlayer::where('game_manager_id', $lockedGame->created_by)
+                    ->where('player_id', $user->id)
+                    ->first();
+
+                if (! $managerPlayer) {
+                    throw new RuntimeException('You have not been authorized by the Game Manager hosting this game. Please contact the manager to add you to their roster.');
+                }
+
+                if ($managerPlayer->balance <= 0) {
+                    $hostName = $creator->name;
+                    throw new RuntimeException("Your balance with {$hostName} is empty ($0.00). Please deposit with this manager to join.");
+                }
+
+                if ($managerPlayer->balance < $lockedGame->entry_fee) {
+                    $bal = '$'.number_format($managerPlayer->balance / 100, 2);
+                    $fee = '$'.number_format($lockedGame->entry_fee / 100, 2);
+                    throw new RuntimeException("Insufficient balance with host Game Manager. Your balance is {$bal}, but entry fee is {$fee}. Please deposit funds to join.");
+                }
+            } else {
+                if ($user->balance <= 0) {
+                    throw new RuntimeException('Your account balance is empty ($0.00). Please deposit funds to join.');
+                }
+
+                if ($user->balance < $lockedGame->entry_fee) {
+                    throw new RuntimeException("Insufficient wallet balance. Your balance is \${$user->formattedBalance()}, but entry fee is \${$lockedGame->formattedEntryFee()}.");
+                }
+            }
+
             // Handle entry fee deduction via ledger
             if ($lockedGame->entry_fee > 0) {
                 $this->ledgerService->recordEntryFee($user, $lockedGame);
             }
 
-            // Record game participation
+            // Record game participation (cards are not assigned by default; manager assigns prior to start)
             $gamePlayer = GamePlayer::create([
                 'game_id' => $lockedGame->id,
                 'user_id' => $user->id,
                 'entry_fee_paid' => $lockedGame->entry_fee,
                 'joined_at' => now(),
             ]);
-
-            // Assign fixed card from company inventory
-            $this->assignCardToPlayer($lockedGame, $user);
 
             $count = GamePlayer::where('game_id', $lockedGame->id)->count();
             try {
@@ -84,7 +116,7 @@ class CardAssignmentService
                 Log::warning("WebSocket broadcast skipped or failed for PlayerJoinedGame: {$e->getMessage()}");
             }
 
-            return $gamePlayer->load('assignedCard.version');
+            return $gamePlayer;
         });
     }
 
@@ -122,13 +154,22 @@ class CardAssignmentService
         // Mark card as assigned
         $card->update(['status' => BingoCard::STATUS_ASSIGNED]);
 
-        return GameCard::create([
+        $gameCard = GameCard::create([
             'game_id' => $game->id,
             'user_id' => $user->id,
             'bingo_card_id' => $card->id,
             'bingo_card_version_id' => $card->current_version_id,
             'assigned_at' => now(),
         ]);
+
+        $count = GamePlayer::where('game_id', $game->id)->count();
+        try {
+            event(new PlayerJoinedGame($game, $user, $count));
+        } catch (\Throwable $e) {
+            Log::warning("WebSocket broadcast skipped or failed for PlayerJoinedGame: {$e->getMessage()}");
+        }
+
+        return $gameCard;
     }
 
     /**
@@ -254,6 +295,13 @@ class CardAssignmentService
 
             $targetCard->update(['status' => BingoCard::STATUS_ASSIGNED]);
 
+            $count = GamePlayer::where('game_id', $lockedGame->id)->count();
+            try {
+                event(new PlayerJoinedGame($lockedGame, $user, $count));
+            } catch (\Throwable $e) {
+                Log::warning("WebSocket broadcast skipped or failed for PlayerJoinedGame: {$e->getMessage()}");
+            }
+
             return $gameCard->load(['card', 'version', 'user']);
         });
     }
@@ -328,6 +376,25 @@ class CardAssignmentService
                 'entry_fee_paid' => $lockedGame->entry_fee,
                 'joined_at' => now(),
             ]);
+
+            // Record cash walk-in entry fee transaction
+            if ($lockedGame->entry_fee > 0) {
+                Transaction::create([
+                    'company_id' => $lockedGame->company_id,
+                    'user_id' => null,
+                    'game_manager_id' => $lockedGame->created_by,
+                    'type' => Transaction::TYPE_ENTRY_FEE,
+                    'amount' => $lockedGame->entry_fee,
+                    'currency' => $lockedGame->currency ?? 'USD',
+                    'status' => Transaction::STATUS_COMPLETED,
+                    'balance_before' => 0,
+                    'balance_after' => 0,
+                    'reference_type' => Game::class,
+                    'reference_id' => $lockedGame->id,
+                    'reference_code' => "WALKIN-G{$lockedGame->id}-C{$cardNumber}",
+                    'description' => "Cash walk-in entry fee for Game #{$lockedGame->game_number} ({$finalIdentifier})",
+                ]);
+            }
 
             // Create GameCard record
             $gameCard = GameCard::create([

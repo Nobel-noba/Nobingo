@@ -7,7 +7,6 @@ use App\Domains\Cards\Services\BingoCardGenerator;
 use App\Domains\Cards\Services\BingoCardValidator;
 use App\Domains\Games\Models\Game;
 use App\Domains\Games\Models\GameCall;
-use App\Domains\Games\Models\GameCard;
 use App\Domains\Games\Models\GameTemplate;
 use App\Domains\Games\Services\CardAssignmentService;
 use App\Domains\Games\Services\GameLifecycleService;
@@ -82,7 +81,7 @@ class BingoClaimAndVerificationWorkflowTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $this->player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $this->player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $this->player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Fetch numbers in Column 0 (Column B)
@@ -111,7 +110,7 @@ class BingoClaimAndVerificationWorkflowTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $this->player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $this->player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $this->player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Fetch numbers in Main Diagonal: [0,0], [1,1], [2,2] (free), [3,3], [4,4]
@@ -142,7 +141,7 @@ class BingoClaimAndVerificationWorkflowTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $this->player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $this->player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $this->player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Call row 0 numbers
@@ -188,7 +187,7 @@ class BingoClaimAndVerificationWorkflowTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $this->player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $this->player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $this->player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Call numbers and submit claim
@@ -238,7 +237,7 @@ class BingoClaimAndVerificationWorkflowTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $this->player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $this->player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $this->player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         $call = GameCall::create([

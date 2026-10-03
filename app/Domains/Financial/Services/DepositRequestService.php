@@ -116,7 +116,8 @@ class DepositRequestService
                     $user,
                     $locked->amount,
                     referenceCode: "DEP-REQ-{$locked->id}",
-                    description: 'Deposit approved by admin (Ref: '.($locked->reference_number ?? 'N/A').')'
+                    description: 'Deposit approved by '.($reviewer->isGameManager() ? 'manager' : 'admin').' (Ref: '.($locked->reference_number ?? 'N/A').')',
+                    managerId: $reviewer->isGameManager() ? $reviewer->id : null
                 );
             }
 

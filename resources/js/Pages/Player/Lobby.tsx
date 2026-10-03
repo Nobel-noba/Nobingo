@@ -16,6 +16,12 @@ interface LobbyGameItem {
     template_name: string;
     required_pattern_count: number;
     has_joined: boolean;
+    host_name?: string;
+    host_manager_id?: number | null;
+    player_balance?: number;
+    formatted_player_balance?: string;
+    is_balance_empty?: boolean;
+    is_balance_sufficient?: boolean;
 }
 
 interface Props extends PageProps {
@@ -214,9 +220,23 @@ export default function PlayerLobby({ games, tenant }: Props) {
                                             </div>
 
                                             <div className="flex justify-between items-center">
+                                                <span className="text-slate-400">Host:</span>
+                                                <span className="font-semibold text-indigo-300">
+                                                    {game.host_name || 'House'}
+                                                </span>
+                                            </div>
+
+                                            <div className="flex justify-between items-center">
                                                 <span className="text-slate-400">Entry Ticket:</span>
                                                 <span className="font-black text-white">
                                                     {game.formatted_entry_fee}
+                                                </span>
+                                            </div>
+
+                                            <div className="flex justify-between items-center">
+                                                <span className="text-slate-400">Your Wallet:</span>
+                                                <span className={`font-mono font-bold ${game.is_balance_sufficient ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                    {game.formatted_player_balance ?? '$0.00'}
                                                 </span>
                                             </div>
 
@@ -254,27 +274,43 @@ export default function PlayerLobby({ games, tenant }: Props) {
                                                 Enter Game Room &rarr;
                                             </Link>
                                         ) : game.status === 'open' ? (
-                                            <button
-                                                type="button"
-                                                onClick={() => handleJoin(game.id)}
-                                                disabled={joiningId === game.id || game.players_count >= game.max_players}
-                                                className={`w-full font-black text-xs py-3.5 rounded-2xl shadow-lg transition flex items-center justify-center space-x-2 active:scale-95 ${
-                                                    game.players_count >= game.max_players
-                                                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed shadow-none'
-                                                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/20 cursor-pointer'
-                                                }`}
-                                            >
-                                                {joiningId === game.id ? (
-                                                    <span>Assigning Fixed Card...</span>
-                                                ) : game.players_count >= game.max_players ? (
-                                                    <span>Room Full</span>
-                                                ) : (
-                                                    <>
-                                                        <span>Join Match</span>
-                                                        <span className="opacity-75">({game.formatted_entry_fee})</span>
-                                                    </>
-                                                )}
-                                            </button>
+                                            game.is_balance_empty || !game.is_balance_sufficient ? (
+                                                <div className="space-y-2">
+                                                    <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-2.5 text-center text-[11px] text-rose-300">
+                                                        {game.is_balance_empty
+                                                            ? `Your balance with ${game.host_name || 'this host'} is empty ($0.00).`
+                                                            : `Insufficient balance (${game.formatted_player_balance} available).`}
+                                                    </div>
+                                                    <Link
+                                                        href={`/c/${companySlug}/wallet`}
+                                                        className="w-full block text-center bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs py-3 rounded-2xl shadow-lg shadow-amber-600/20 transition active:scale-95"
+                                                    >
+                                                        Deposit to Join &rarr;
+                                                    </Link>
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleJoin(game.id)}
+                                                    disabled={joiningId === game.id || game.players_count >= game.max_players}
+                                                    className={`w-full font-black text-xs py-3.5 rounded-2xl shadow-lg transition flex items-center justify-center space-x-2 active:scale-95 ${
+                                                        game.players_count >= game.max_players
+                                                            ? 'bg-slate-800 text-slate-500 cursor-not-allowed shadow-none'
+                                                            : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/20 cursor-pointer'
+                                                    }`}
+                                                >
+                                                    {joiningId === game.id ? (
+                                                        <span>Assigning Fixed Card...</span>
+                                                    ) : game.players_count >= game.max_players ? (
+                                                        <span>Room Full</span>
+                                                    ) : (
+                                                        <>
+                                                            <span>Join Match</span>
+                                                            <span className="opacity-75">({game.formatted_entry_fee})</span>
+                                                        </>
+                                                    )}
+                                                </button>
+                                            )
                                         ) : (
                                             <div className="w-full text-center py-3 bg-slate-900 text-slate-500 text-xs font-semibold rounded-2xl border border-slate-800">
                                                 Match In Progress

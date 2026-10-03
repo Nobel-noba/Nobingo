@@ -125,7 +125,9 @@ class SecurityAuditTest extends TestCase
 
         // Both join game
         $this->assignmentService->joinGame($game, $this->playerA);
+        $this->assignmentService->assignCardToPlayer($game, $this->playerA);
         $this->assignmentService->joinGame($game, $playerTwo);
+        $this->assignmentService->assignCardToPlayer($game, $playerTwo);
 
         $this->lifecycleService->startGame($game);
 
@@ -159,7 +161,9 @@ class SecurityAuditTest extends TestCase
         $playerTwo->assignRole(Role::PLAYER);
 
         $this->assignmentService->joinGame($game, $this->playerA);
+        $this->assignmentService->assignCardToPlayer($game, $this->playerA);
         $this->assignmentService->joinGame($game, $playerTwo);
+        $this->assignmentService->assignCardToPlayer($game, $playerTwo);
         $this->lifecycleService->startGame($game);
 
         $cardTwo = GameCard::where('game_id', $game->id)->where('user_id', $playerTwo->id)->firstOrFail();
@@ -309,6 +313,7 @@ class SecurityAuditTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->companyA);
         $this->lifecycleService->openGame($game);
         $this->assignmentService->joinGame($game, $this->playerA);
+        $this->assignmentService->assignCardToPlayer($game, $this->playerA);
         $this->lifecycleService->startGame($game);
 
         // Call only 1 ball
@@ -336,6 +341,7 @@ class SecurityAuditTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->companyA);
         $this->lifecycleService->openGame($game);
         $this->assignmentService->joinGame($game, $this->playerA);
+        $this->assignmentService->assignCardToPlayer($game, $this->playerA);
         $this->lifecycleService->startGame($game);
 
         $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $this->playerA->id)->firstOrFail();
@@ -383,6 +389,7 @@ class SecurityAuditTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->companyA);
         $this->lifecycleService->openGame($game);
         $this->assignmentService->joinGame($game, $this->playerA);
+        $this->assignmentService->assignCardToPlayer($game, $this->playerA);
         $this->lifecycleService->startGame($game);
 
         $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $this->playerA->id)->firstOrFail();

@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers\Company;
 
+use App\Domains\Auth\Models\Role;
 use App\Domains\Cards\Models\BingoCard;
 use App\Domains\Games\Models\Game;
 use App\Domains\Games\Models\GameCard;
+use App\Domains\Games\Models\GamePlayer;
 use App\Domains\Games\Models\GameTemplate;
 use App\Domains\Games\Services\CardAssignmentService;
 use App\Domains\Games\Services\GameLifecycleService;
@@ -33,12 +35,21 @@ class GameManagementController extends Controller
      */
     public function index(Company $company, Request $request): Response
     {
+        $user = $request->user();
+        $isGameManagerOnly = $user->isGameManager() && ! $user->isCompanyAdmin() && ! $user->isPlatformOwner();
         $statusFilter = $request->query('status');
+        $managerFilter = $request->query('manager_id');
 
         $query = Game::where('company_id', $company->id)
             ->with(['template', 'creator'])
             ->withCount('players')
             ->orderBy('game_number', 'desc');
+
+        if ($isGameManagerOnly) {
+            $query->where('created_by', $user->id);
+        } elseif ($managerFilter) {
+            $query->where('created_by', $managerFilter);
+        }
 
         if ($statusFilter) {
             $query->where('status', $statusFilter);
@@ -47,18 +58,38 @@ class GameManagementController extends Controller
         $games = $query->paginate(20)->withQueryString();
         $templates = GameTemplate::availableForCompany($company->id)->get();
 
+        $statsQuery = Game::where('company_id', $company->id);
+        if ($isGameManagerOnly) {
+            $statsQuery->where('created_by', $user->id);
+        } elseif ($managerFilter) {
+            $statsQuery->where('created_by', $managerFilter);
+        }
+
         $stats = [
-            'total' => Game::where('company_id', $company->id)->count(),
-            'open' => Game::where('company_id', $company->id)->where('status', Game::STATUS_OPEN)->count(),
-            'active' => Game::where('company_id', $company->id)->where('status', Game::STATUS_ACTIVE)->count(),
-            'completed' => Game::where('company_id', $company->id)->where('status', Game::STATUS_COMPLETED)->count(),
+            'total' => (clone $statsQuery)->count(),
+            'open' => (clone $statsQuery)->where('status', Game::STATUS_OPEN)->count(),
+            'active' => (clone $statsQuery)->where('status', Game::STATUS_ACTIVE)->count(),
+            'completed' => (clone $statsQuery)->where('status', Game::STATUS_COMPLETED)->count(),
         ];
+
+        $gameManagers = ! $isGameManagerOnly
+            ? User::where('company_id', $company->id)
+                ->whereHas('roles', fn ($q) => $q->where('slug', Role::GAME_MANAGER))
+                ->select(['id', 'name', 'email'])
+                ->orderBy('name')
+                ->get()
+            : [];
 
         return Inertia::render('Company/Games/Index', [
             'games' => $games,
             'templates' => $templates,
-            'filters' => ['status' => $statusFilter],
+            'filters' => [
+                'status' => $statusFilter,
+                'manager_id' => $managerFilter,
+            ],
             'stats' => $stats,
+            'game_managers' => $gameManagers,
+            'is_game_manager_view' => $isGameManagerOnly,
         ]);
     }
 
@@ -118,18 +149,18 @@ class GameManagementController extends Controller
     /**
      * Display a specific game room and operator controls.
      */
-    public function show(Company $company, Game $game): Response
+    public function show(Company $company, Game $game, Request $request): Response
     {
         if ($game->company_id !== $company->id) {
             abort(404);
         }
 
+        $this->authorizeGameManager($game, $request->user());
+
         $game->load([
             'template',
             'creator',
             'players.user',
-            'players.assignedCard.card',
-            'players.assignedCard.version',
             'cards.card',
             'cards.version',
             'cards.user',
@@ -161,8 +192,12 @@ class GameManagementController extends Controller
         $masterBoard = $this->callingService->getMasterBoard($game);
         $remainingCount = count($this->callingService->getRemainingNumbers($game));
 
+        $user = $request->user();
+        $isObserver = $game->created_by !== null && (int) $game->created_by !== (int) $user->id;
+
         return Inertia::render('Company/Games/Show', [
             'game' => $game,
+            'is_observer' => $isObserver,
             'available_cards_count' => $availableCardsCount,
             'available_card_numbers' => $availableCardNumbers,
             'company_players' => $companyPlayers,
@@ -179,6 +214,8 @@ class GameManagementController extends Controller
         if ($game->company_id !== $company->id) {
             abort(404);
         }
+
+        $this->authorizeGameManager($game, $request->user(), mutating: true);
 
         if (! $game->isActive()) {
             if ($request->wantsJson()) {
@@ -227,6 +264,8 @@ class GameManagementController extends Controller
             abort(404);
         }
 
+        $this->authorizeGameManager($game, $request->user(), mutating: true);
+
         $validated = $request->validate([
             'status' => ['required', 'string', 'in:'.implode(',', [
                 Game::STATUS_OPEN,
@@ -252,6 +291,32 @@ class GameManagementController extends Controller
             }
         }
 
+        // Enforce that all joined registered players must have an assigned card before starting
+        if (in_array($validated['status'], [Game::STATUS_STARTING, Game::STATUS_ACTIVE], true) && in_array($game->status, [Game::STATUS_OPEN, Game::STATUS_DRAFT], true)) {
+            $assignedUserIds = GameCard::where('game_id', $game->id)
+                ->whereNull('released_at')
+                ->whereNotNull('user_id')
+                ->pluck('user_id');
+
+            $unassignedPlayers = GamePlayer::where('game_id', $game->id)
+                ->whereNotNull('user_id')
+                ->whereNotIn('user_id', $assignedUserIds)
+                ->with('user')
+                ->get();
+
+            if ($unassignedPlayers->isNotEmpty()) {
+                $names = $unassignedPlayers->map(fn ($p) => $p->user?->name ?? "Player #{$p->user_id}")->join(', ');
+                $count = $unassignedPlayers->count();
+                $noun = $count === 1 ? 'player' : 'players';
+
+                return redirect()->back()
+                    ->with('error', "Cannot start game: {$count} {$noun} ({$names}) have not been assigned cards yet. Please assign a card to each player before starting.")
+                    ->withErrors([
+                        'cards' => "Cannot start game: {$count} {$noun} ({$names}) have not been assigned cards yet. Please assign a card to each player before starting.",
+                    ]);
+            }
+        }
+
         $this->lifecycleService->transitionTo($game, $validated['status']);
 
         return redirect()->back()->with('success', "Game transitioned to status {$validated['status']}.");
@@ -266,10 +331,12 @@ class GameManagementController extends Controller
             abort(404);
         }
 
+        $this->authorizeGameManager($game, $request->user(), mutating: true);
+
         $validated = $request->validate([
             'is_walkin' => ['sometimes', 'boolean'],
             'user_id' => ['nullable', 'required_without:is_walkin', 'exists:users,id'],
-            'card_number' => ['required', 'integer', 'min:1'],
+            'card_number' => ['nullable', 'integer', 'min:1'],
             'guest_identifier' => ['nullable', 'string', 'max:255'],
         ]);
 
@@ -277,6 +344,13 @@ class GameManagementController extends Controller
             $assignmentService = app(CardAssignmentService::class);
 
             if ($request->boolean('is_walkin')) {
+                if (empty($validated['card_number'])) {
+                    if ($request->wantsJson()) {
+                        return response()->json(['error' => 'Please provide a card number for walk-in player.'], 422);
+                    }
+
+                    return redirect()->back()->with('error', 'Please provide a card number for walk-in player.');
+                }
                 $gameCard = $assignmentService->assignWalkInCard(
                     $game,
                     (int) $validated['card_number'],
@@ -287,12 +361,17 @@ class GameManagementController extends Controller
                 $message = "Card {$cardNumberFormatted} successfully assigned to cash walk-in player ({$displayName}).";
             } else {
                 $user = User::findOrFail($validated['user_id']);
-                $gameCard = $assignmentService->assignSpecificCardToPlayer(
-                    $game,
-                    $user,
-                    (int) $validated['card_number']
-                );
-                $cardNumberFormatted = sprintf('#%06d', $validated['card_number']);
+                if (! empty($validated['card_number'])) {
+                    $gameCard = $assignmentService->assignSpecificCardToPlayer(
+                        $game,
+                        $user,
+                        (int) $validated['card_number']
+                    );
+                    $cardNumberFormatted = sprintf('#%06d', $validated['card_number']);
+                } else {
+                    $gameCard = $assignmentService->assignCardToPlayer($game, $user);
+                    $cardNumberFormatted = sprintf('#%06d', $gameCard->card?->card_number ?? $gameCard->id);
+                }
                 $message = "Card {$cardNumberFormatted} successfully assigned to {$user->name}.";
             }
 
@@ -317,11 +396,13 @@ class GameManagementController extends Controller
     /**
      * Confirm and approve a winning claim, release payout, and complete game.
      */
-    public function confirmClaim(Company $company, Game $game, GameWinner $winner): RedirectResponse|JsonResponse
+    public function confirmClaim(Company $company, Game $game, GameWinner $winner, Request $request): RedirectResponse|JsonResponse
     {
         if ($game->company_id !== $company->id || $winner->game_id !== $game->id) {
             abort(404);
         }
+
+        $this->authorizeGameManager($game, $request->user(), mutating: true);
 
         try {
             $result = $this->verificationService->confirmWinnerClaim($game, $winner);
@@ -348,6 +429,8 @@ class GameManagementController extends Controller
         if ($game->company_id !== $company->id || $winner->game_id !== $game->id) {
             abort(404);
         }
+
+        $this->authorizeGameManager($game, $request->user(), mutating: true);
 
         $reason = $request->input('reason', 'Host verified that card does not meet winning pattern requirements.');
 
@@ -376,6 +459,8 @@ class GameManagementController extends Controller
         if ($game->company_id !== $company->id) {
             abort(404);
         }
+
+        $this->authorizeGameManager($game, $request->user(), mutating: false);
 
         $validated = $request->validate([
             'card_number' => ['nullable', 'integer'],
@@ -427,6 +512,8 @@ class GameManagementController extends Controller
             abort(404);
         }
 
+        $this->authorizeGameManager($game, $request->user(), mutating: true);
+
         $validated = $request->validate([
             'game_card_id' => ['nullable', 'integer'],
             'card_number' => ['nullable', 'integer'],
@@ -462,6 +549,28 @@ class GameManagementController extends Controller
             }
 
             return redirect()->back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Authorize that Game Managers can only manage games they started,
+     * and Company Admins can observe but not interfere/mutate games started by a Game Manager.
+     */
+    protected function authorizeGameManager(Game $game, User $user, bool $mutating = false): void
+    {
+        $isGameManagerOnly = $user->isGameManager() && ! $user->isCompanyAdmin() && ! $user->isPlatformOwner();
+
+        if ($isGameManagerOnly) {
+            if ((int) $game->created_by !== (int) $user->id) {
+                abort(403, 'Unauthorized. Game managers can only access and manage games they started.');
+            }
+
+            return;
+        }
+
+        // If the game was created by a specific Game Manager, Company Admins / other operators cannot mutate/interfere
+        if ($mutating && $game->created_by !== null && (int) $game->created_by !== (int) $user->id) {
+            abort(403, 'Observer Mode Active. Only the host Game Manager who started this game can operate or mutate gameplay.');
         }
     }
 }

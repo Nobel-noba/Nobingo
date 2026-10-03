@@ -2,13 +2,16 @@
 
 namespace App\Http\Controllers\Player;
 
+use App\Domains\Auth\Models\Role;
 use App\Domains\Games\Models\Game;
 use App\Domains\Games\Models\GameCard;
 use App\Domains\Games\Models\GamePlayer;
 use App\Domains\Games\Services\CardAssignmentService;
 use App\Domains\Games\Services\NumberCallingService;
 use App\Domains\Tenancy\Models\Company;
+use App\Domains\Tenancy\Models\GameManagerPlayer;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -24,14 +27,49 @@ class GameLobbyController extends Controller
     {
         $user = $request->user();
 
+        $authorizedManagerIds = $user
+            ? GameManagerPlayer::where('player_id', $user->id)->pluck('game_manager_id')->all()
+            : [];
+
+        $managerUserIds = User::where('company_id', $company->id)
+            ->whereHas('roles', fn ($q) => $q->where('slug', Role::GAME_MANAGER))
+            ->pluck('id')
+            ->all();
+
         $openGames = Game::where('company_id', $company->id)
             ->whereIn('status', [Game::STATUS_OPEN, Game::STATUS_STARTING, Game::STATUS_ACTIVE])
-            ->with(['template'])
+            ->where(function ($q) use ($authorizedManagerIds, $managerUserIds) {
+                $q->whereNull('created_by')
+                    ->orWhereNotIn('created_by', $managerUserIds)
+                    ->orWhereIn('created_by', $authorizedManagerIds);
+            })
+            ->with(['template', 'creator'])
             ->withCount('players')
             ->orderBy('created_at', 'desc')
             ->get()
-            ->map(function (Game $game) use ($user) {
+            ->map(function (Game $game) use ($user, $company) {
                 $hasJoined = $user ? GamePlayer::where('game_id', $game->id)->where('user_id', $user->id)->exists() : false;
+
+                $managerBalance = 0;
+                $formattedBalance = '$0.00';
+                $hostName = $game->creator ? $game->creator->name : $company->name;
+                $isHostedByManager = $game->creator && $game->creator->isGameManager() && ! $game->creator->isCompanyAdmin();
+
+                if ($user) {
+                    if ($isHostedByManager) {
+                        $gmPlayer = GameManagerPlayer::where('game_manager_id', $game->created_by)
+                            ->where('player_id', $user->id)
+                            ->first();
+                        $managerBalance = $gmPlayer ? $gmPlayer->balance : 0;
+                        $formattedBalance = '$'.number_format($managerBalance / 100, 2);
+                    } else {
+                        $managerBalance = $user->balance;
+                        $formattedBalance = $user->formattedBalance();
+                    }
+                }
+
+                $isBalanceEmpty = $managerBalance <= 0;
+                $isBalanceSufficient = $managerBalance >= $game->entry_fee && ! $isBalanceEmpty;
 
                 return [
                     'id' => $game->id,
@@ -46,6 +84,12 @@ class GameLobbyController extends Controller
                     'template_name' => $game->template?->name ?? 'Custom Match',
                     'required_pattern_count' => data_get($game->configuration_snapshot, 'required_pattern_count', 1),
                     'has_joined' => $hasJoined,
+                    'host_name' => $hostName,
+                    'host_manager_id' => $game->created_by,
+                    'player_balance' => $managerBalance,
+                    'formatted_player_balance' => $formattedBalance,
+                    'is_balance_empty' => $isBalanceEmpty,
+                    'is_balance_sufficient' => $isBalanceSufficient,
                 ];
             });
 
@@ -74,19 +118,37 @@ class GameLobbyController extends Controller
     /**
      * View the live game room interface for an active or starting game.
      */
-    public function show(Company $company, Game $game, Request $request, NumberCallingService $callerService): Response
+    public function show(Company $company, Game $game, Request $request, NumberCallingService $callerService): Response|RedirectResponse
     {
         $user = $request->user();
 
-        // Retrieve player's assigned fixed card for this game
+        // Verify that the player has joined this game
+        $gamePlayer = GamePlayer::where('game_id', $game->id)
+            ->where('user_id', $user->id)
+            ->first();
+
+        if (! $gamePlayer) {
+            return redirect()->route('player.lobby', ['company' => $company->slug])
+                ->with('error', 'You must join this game before entering the room.');
+        }
+
+        // Retrieve player's assigned fixed card for this game if already assigned by host
         $gameCard = GameCard::where('game_id', $game->id)
             ->where('user_id', $user->id)
+            ->whereNull('released_at')
             ->with(['card', 'version'])
             ->first();
 
-        if (! $gameCard) {
-            return redirect()->route('player.lobby', ['company' => $company->slug])
-                ->with('error', 'You must join this game before entering the room.');
+        $playerCardData = null;
+        if ($gameCard && $gameCard->card && $gameCard->version) {
+            $playerCardData = [
+                'id' => $gameCard->id,
+                'card_id' => $gameCard->card->id,
+                'card_number' => $gameCard->card->formattedCardNumber(),
+                'version' => $gameCard->version->version_number,
+                'grid' => $gameCard->version->grid,
+                'marked_positions' => $gameCard->getMarkedPositions(),
+            ];
         }
 
         $game->load(['calls', 'lastCall']);
@@ -117,14 +179,7 @@ class GameLobbyController extends Controller
                 ]),
                 'remaining_count' => count($callerService->getRemainingNumbers($game)),
             ],
-            'player_card' => [
-                'id' => $gameCard->id,
-                'card_id' => $gameCard->card->id,
-                'card_number' => $gameCard->card->formattedCardNumber(),
-                'version' => $gameCard->version->version_number,
-                'grid' => $gameCard->version->grid,
-                'marked_positions' => $gameCard->getMarkedPositions(),
-            ],
+            'player_card' => $playerCardData,
             'master_board' => $callerService->getMasterBoard($game),
         ]);
     }

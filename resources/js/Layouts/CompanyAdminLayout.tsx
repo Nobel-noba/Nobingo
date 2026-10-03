@@ -63,6 +63,26 @@ export default function CompanyAdminLayout({
                         </svg>
                     ),
                 },
+                {
+                    name: 'Money Flows & Ledger',
+                    href: `/c/${companySlug}/admin/transactions`,
+                    active: currentPath.startsWith(`/c/${companySlug}/admin/transactions`) || currentPath.startsWith(`/c/${companySlug}/admin/ledger`),
+                    icon: (
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                        </svg>
+                    ),
+                },
+                {
+                    name: 'Walk-in & Cash Reports',
+                    href: `/c/${companySlug}/admin/reports`,
+                    active: currentPath.startsWith(`/c/${companySlug}/admin/reports`),
+                    icon: (
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                    ),
+                },
             ],
         },
         {
@@ -188,7 +208,7 @@ export default function CompanyAdminLayout({
                 {
                     name: 'Treasury & Ledger',
                     href: `/c/${companySlug}/admin/ledger`,
-                    active: currentPath.startsWith(`/c/${companySlug}/admin/ledger`),
+                    active: currentPath.startsWith(`/c/${companySlug}/admin/ledger`) || currentPath.startsWith(`/c/${companySlug}/admin/transactions`),
                     icon: (
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />

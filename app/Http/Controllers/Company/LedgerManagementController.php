@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers\Company;
 
+use App\Domains\Auth\Models\Role;
 use App\Domains\Financial\Models\Transaction;
 use App\Domains\Tenancy\Models\Company;
 use App\Domains\Winners\Models\GameWinner;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -17,12 +20,30 @@ class LedgerManagementController extends Controller
      */
     public function index(Request $request, Company $company): Response
     {
+        $user = $request->user();
+        $isGameManager = $user && $user->isGameManager() && ! $user->isCompanyAdmin() && ! $user->isPlatformOwner();
+
+        $managerId = $isGameManager ? $user->id : ($request->filled('manager_id') ? (int) $request->query('manager_id') : null);
         $type = $request->query('type');
         $search = $request->query('search');
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
 
-        $query = Transaction::with(['user:id,name,email', 'reference'])
+        $query = Transaction::with(['user:id,name,email', 'gameManager:id,name,email', 'reference'])
             ->where('company_id', $company->id)
             ->latest('id');
+
+        if ($managerId !== null) {
+            $query->where('game_manager_id', $managerId);
+        }
+
+        if ($startDate) {
+            $query->where('created_at', '>=', Carbon::parse($startDate)->startOfDay());
+        }
+
+        if ($endDate) {
+            $query->where('created_at', '<=', Carbon::parse($endDate)->endOfDay());
+        }
 
         if ($type && $type !== 'ALL') {
             $query->where('type', $type);
@@ -56,40 +77,65 @@ class LedgerManagementController extends Controller
             'description' => $tx->description,
             'is_credit' => $tx->isCredit(),
             'is_debit' => $tx->isDebit(),
+            'is_walkin' => $tx->user_id === null && ($tx->type === Transaction::TYPE_ENTRY_FEE || $tx->type === Transaction::TYPE_PRIZE),
             'user' => $tx->user ? [
                 'id' => $tx->user->id,
                 'name' => $tx->user->name,
                 'email' => $tx->user->email,
             ] : null,
+            'game_manager' => $tx->gameManager ? [
+                'id' => $tx->gameManager->id,
+                'name' => $tx->gameManager->name,
+                'email' => $tx->gameManager->email,
+            ] : null,
             'created_at' => $tx->created_at->format('M d, Y H:i:s'),
         ]);
 
-        // Compute company statistics
-        $entryFees = Transaction::where('company_id', $company->id)
-            ->where('type', Transaction::TYPE_ENTRY_FEE)
-            ->sum('amount');
+        // Compute scoped statistics
+        $statsQuery = Transaction::where('company_id', $company->id);
+        if ($managerId !== null) {
+            $statsQuery->where('game_manager_id', $managerId);
+        }
+        if ($startDate) {
+            $statsQuery->where('created_at', '>=', Carbon::parse($startDate)->startOfDay());
+        }
+        if ($endDate) {
+            $statsQuery->where('created_at', '<=', Carbon::parse($endDate)->endOfDay());
+        }
 
-        $prizes = Transaction::where('company_id', $company->id)
-            ->where('type', Transaction::TYPE_PRIZE)
-            ->sum('amount');
+        $entryFees = (int) (clone $statsQuery)->where('type', Transaction::TYPE_ENTRY_FEE)->sum('amount');
+        $prizes = (int) (clone $statsQuery)->where('type', Transaction::TYPE_PRIZE)->sum('amount');
+        $refunds = (int) (clone $statsQuery)->where('type', Transaction::TYPE_REFUND)->sum('amount');
+        $deposits = (int) (clone $statsQuery)->where('type', Transaction::TYPE_DEPOSIT)->sum('amount');
+        $withdrawals = (int) (clone $statsQuery)->where('type', Transaction::TYPE_WITHDRAWAL)->sum('amount');
 
-        $refunds = Transaction::where('company_id', $company->id)
-            ->where('type', Transaction::TYPE_REFUND)
-            ->sum('amount');
+        // Walk-in specific metrics
+        $walkInSales = (int) (clone $statsQuery)->where('type', Transaction::TYPE_ENTRY_FEE)->whereNull('user_id')->sum('amount');
+        $walkInPrizes = (int) (clone $statsQuery)->where('type', Transaction::TYPE_PRIZE)->whereNull('user_id')->sum('amount');
+        $walkInNetCash = $walkInSales - $walkInPrizes;
 
-        $deposits = Transaction::where('company_id', $company->id)
-            ->where('type', Transaction::TYPE_DEPOSIT)
-            ->sum('amount');
-
-        $withdrawals = Transaction::where('company_id', $company->id)
-            ->where('type', Transaction::TYPE_WITHDRAWAL)
-            ->sum('amount');
+        // Cash on Hand calculation (Physical Cash In minus Physical Cash Out)
+        $cashInflows = $walkInSales + $deposits;
+        $cashOutflows = $walkInPrizes + $withdrawals;
+        $periodNetCash = $cashInflows - $cashOutflows;
 
         $pendingPayouts = GameWinner::where('company_id', $company->id)
-            ->where('payout_status', GameWinner::PAYOUT_STATUS_PENDING)
-            ->sum('payout_amount');
+            ->where('payout_status', GameWinner::PAYOUT_STATUS_PENDING);
+        if ($managerId !== null) {
+            $pendingPayouts->whereHas('game', fn ($g) => $g->where('created_by', $managerId));
+        }
+        $pendingPayoutsSum = (int) $pendingPayouts->sum('payout_amount');
 
         $netHouseEarnings = $entryFees - ($prizes + $refunds);
+
+        $managers = [];
+        if (! $isGameManager) {
+            $managers = User::where('company_id', $company->id)
+                ->whereHas('roles', fn ($q) => $q->where('slug', Role::GAME_MANAGER))
+                ->orderBy('name')
+                ->select(['id', 'name', 'email'])
+                ->get();
+        }
 
         return Inertia::render('Company/Ledger/Index', [
             'company' => [
@@ -97,6 +143,8 @@ class LedgerManagementController extends Controller
                 'name' => $company->name,
                 'slug' => $company->slug,
             ],
+            'is_game_manager' => $isGameManager,
+            'managers' => $managers,
             'transactions' => $transactions,
             'statistics' => [
                 'entry_fees' => $entryFees,
@@ -109,14 +157,25 @@ class LedgerManagementController extends Controller
                 'formatted_deposits' => '$'.number_format($deposits / 100, 2),
                 'withdrawals' => $withdrawals,
                 'formatted_withdrawals' => '$'.number_format($withdrawals / 100, 2),
-                'pending_payouts' => $pendingPayouts,
-                'formatted_pending_payouts' => '$'.number_format($pendingPayouts / 100, 2),
+                'walkin_sales' => $walkInSales,
+                'formatted_walkin_sales' => '$'.number_format($walkInSales / 100, 2),
+                'walkin_prizes' => $walkInPrizes,
+                'formatted_walkin_prizes' => '$'.number_format($walkInPrizes / 100, 2),
+                'walkin_net_cash' => $walkInNetCash,
+                'formatted_walkin_net_cash' => ($walkInNetCash < 0 ? '-' : '+').'$'.number_format(abs($walkInNetCash) / 100, 2),
+                'period_net_cash' => $periodNetCash,
+                'formatted_period_net_cash' => ($periodNetCash < 0 ? '-' : '+').'$'.number_format(abs($periodNetCash) / 100, 2),
+                'pending_payouts' => $pendingPayoutsSum,
+                'formatted_pending_payouts' => '$'.number_format($pendingPayoutsSum / 100, 2),
                 'net_house_earnings' => $netHouseEarnings,
                 'formatted_net_house_earnings' => ($netHouseEarnings < 0 ? '-' : '+').'$'.number_format(abs($netHouseEarnings) / 100, 2),
             ],
             'filters' => [
                 'type' => $type ?? 'ALL',
                 'search' => $search ?? '',
+                'manager_id' => $managerId ? (string) $managerId : '',
+                'start_date' => $startDate ?? '',
+                'end_date' => $endDate ?? '',
             ],
         ]);
     }

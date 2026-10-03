@@ -183,13 +183,16 @@ class CompanyDepositRequestController extends Controller
             ->firstOrFail();
 
         $amountInCents = (int) round(((float) $validated['amount']) * 100);
-        $reason = ! empty($validated['notes']) ? $validated['notes'] : 'Admin manual top-up';
+        $reason = ! empty($validated['notes']) ? $validated['notes'] : 'Manual top-up';
+        $managerId = $request->user()->isGameManager() ? $request->user()->id : null;
+        $roleTitle = $request->user()->isGameManager() ? 'Manager' : 'Admin';
 
         $this->ledgerService->recordDeposit(
             $player,
             $amountInCents,
             referenceCode: 'MAN-'.bin2hex(random_bytes(5)),
-            description: "Admin top-up: {$reason}"
+            description: "{$roleTitle} top-up: {$reason}",
+            managerId: $managerId
         );
 
         return back()->with('success', "Successfully credited \${$validated['amount']}.00 to {$player->name}'s account.");

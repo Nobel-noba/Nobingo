@@ -153,7 +153,7 @@ class NumberCallingEngineTest extends TestCase
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
 
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = $game->cards()->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
 
         // Initially marked positions contain only the FREE center [2, 2]
         $this->assertEquals([[2, 2]], $gameCard->getMarkedPositions());
@@ -184,7 +184,7 @@ class NumberCallingEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company, ['status' => Game::STATUS_DRAFT]);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = $game->cards()->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
 
         $grid = $gameCard->version->grid;
         $uncalledNumber = $grid[0][1];
@@ -208,7 +208,7 @@ class NumberCallingEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company, ['status' => Game::STATUS_DRAFT]);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = $game->cards()->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
 
         $grid = $gameCard->version->grid;
         $numberToCall = $grid[1][1];
@@ -263,7 +263,7 @@ class NumberCallingEngineTest extends TestCase
         $game = $this->lifecycleService->createFromTemplate($template, $this->company, ['status' => Game::STATUS_DRAFT]);
         $this->lifecycleService->transitionTo($game, Game::STATUS_OPEN);
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = $game->cards()->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
         $this->lifecycleService->transitionTo($game, Game::STATUS_ACTIVE);
 
         // Fetch state via GET

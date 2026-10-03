@@ -1,6 +1,7 @@
 import CompanyAdminLayout from '@/Layouts/CompanyAdminLayout';
 import { PageProps } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
+import axios from 'axios';
 import { useState, useEffect, useRef } from 'react';
 
 interface GamePlayerItem {
@@ -61,6 +62,12 @@ interface GameDetail {
     max_players: number;
     call_interval: number;
     winner_policy: string;
+    created_by?: number | null;
+    creator?: {
+        id: number;
+        name: string;
+        email: string;
+    } | null;
     configuration_snapshot: {
         template_name?: string;
         required_pattern_count?: number;
@@ -123,6 +130,7 @@ interface CardVerificationData {
 
 interface Props extends PageProps {
     game: GameDetail;
+    is_observer?: boolean;
     available_cards_count: number;
     available_card_numbers?: number[];
     company_players?: Array<{ id: number; name: string; email: string }>;
@@ -132,6 +140,7 @@ interface Props extends PageProps {
 
 export default function GameShow({
     game,
+    is_observer = false,
     available_cards_count,
     available_card_numbers = [],
     company_players = [],
@@ -145,6 +154,43 @@ export default function GameShow({
     const [liveGame, setLiveGame] = useState(game);
     const [liveBoard, setLiveBoard] = useState(master_board);
     const [liveRemaining, setLiveRemaining] = useState(remaining_count);
+
+    // Amharic Voice Engine
+    const [voiceEnabled, setVoiceEnabled] = useState<boolean>(() => {
+        return typeof window !== 'undefined' ? localStorage.getItem('bingo_voice_enabled') !== 'false' : true;
+    });
+    const [voiceGender, setVoiceGender] = useState<'ma' | 'fm'>(() => {
+        return (typeof window !== 'undefined' ? (localStorage.getItem('bingo_voice_gender') as 'ma' | 'fm') : 'ma') || 'ma';
+    });
+
+    // Audio Player & Autoplay Management
+    const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+    const lastPlayedSeqRef = useRef<number | null>(null);
+    const [unassignedWarningModalOpen, setUnassignedWarningModalOpen] = useState(false);
+    const [unassignedPlayersList, setUnassignedPlayersList] = useState<GamePlayerItem[]>([]);
+
+    const playVoice = (audioFile: string) => {
+        if (!voiceEnabled) return;
+        try {
+            const audioPath = `/voices/am/${voiceGender}/${audioFile}`;
+            const audio = new Audio(audioPath);
+            audioPlayerRef.current = audio;
+            audio.play().catch((e) => console.warn('Audio play suppressed/failed:', audioPath, e));
+        } catch (e) {
+            console.warn('Audio play failed:', e);
+        }
+    };
+
+    const toggleVoice = () => {
+        const next = !voiceEnabled;
+        setVoiceEnabled(next);
+        if (typeof window !== 'undefined') localStorage.setItem('bingo_voice_enabled', String(next));
+    };
+
+    const changeVoiceGender = (gender: 'ma' | 'fm') => {
+        setVoiceGender(gender);
+        if (typeof window !== 'undefined') localStorage.setItem('bingo_voice_gender', gender);
+    };
 
     // Fullscreen Console Mode
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -197,7 +243,10 @@ export default function GameShow({
             setTargetCardNumber(targetUser.currentCard ? String(targetUser.currentCard) : '');
         } else {
             setIsWalkIn(false);
-            const firstId = liveGame.players.find(p => p.user)?.user?.id || company_players[0]?.id || '';
+            const firstUnassigned = (liveGame.players || []).find(
+                (p) => p.user && !liveGame.cards.some((c) => c.user_id === p.user?.id)
+            );
+            const firstId = firstUnassigned?.user?.id || liveGame.players.find(p => p.user)?.user?.id || company_players[0]?.id || '';
             setSelectedUserId(firstId);
             setGuestIdentifier('');
             setTargetCardNumber('');
@@ -208,7 +257,7 @@ export default function GameShow({
     const handleAssignCard = (e: React.FormEvent) => {
         e.preventDefault();
         if (!isWalkIn && !selectedUserId) return;
-        if (!targetCardNumber) return;
+        if (isWalkIn && !targetCardNumber) return;
 
         setAssigningCard(true);
         setAssignError(null);
@@ -216,7 +265,7 @@ export default function GameShow({
         router.post(`/c/${companySlug}/admin/games/${game.id}/assign-card`, {
             is_walkin: isWalkIn,
             user_id: isWalkIn ? null : selectedUserId,
-            card_number: parseInt(targetCardNumber, 10),
+            card_number: targetCardNumber ? parseInt(targetCardNumber, 10) : null,
             guest_identifier: isWalkIn ? (guestIdentifier || `Walk-in Cash Player (#${targetCardNumber})`) : null,
         }, {
             preserveScroll: true,
@@ -325,6 +374,7 @@ export default function GameShow({
         router.post(`/c/${companySlug}/admin/games/${game.id}/claims/${verificationData.winner_id}/confirm`, {}, {
             preserveScroll: true,
             onSuccess: () => {
+                playVoice('winner.wav');
                 setVerificationModalOpen(false);
                 setResolvingClaim(false);
             },
@@ -338,13 +388,13 @@ export default function GameShow({
 
     const handleRejectClaim = () => {
         if (!verificationData?.winner_id) return;
-        if (!confirm('Are you sure you want to reject this claim? The game will remain paused so you can resume calling balls.')) return;
         setResolvingClaim(true);
         setResolveError(null);
 
         router.post(`/c/${companySlug}/admin/games/${game.id}/claims/${verificationData.winner_id}/reject`, {}, {
             preserveScroll: true,
             onSuccess: () => {
+                playVoice('not_winner.wav');
                 setVerificationModalOpen(false);
                 setResolvingClaim(false);
             },
@@ -367,6 +417,7 @@ export default function GameShow({
         }, {
             preserveScroll: true,
             onSuccess: () => {
+                playVoice('winner.wav');
                 setVerificationModalOpen(false);
                 setResolvingClaim(false);
             },
@@ -394,6 +445,11 @@ export default function GameShow({
         const channel = window.Echo.private(channelName);
 
         channel.listen('.number.called', (event: any) => {
+            if (lastPlayedSeqRef.current !== event.sequence_index) {
+                lastPlayedSeqRef.current = event.sequence_index;
+                playVoice(`${event.letter}${event.ball_number}.wav`);
+            }
+
             const newCall = {
                 id: Date.now(),
                 sequence_index: event.sequence_index,
@@ -402,11 +458,14 @@ export default function GameShow({
                 called_at: event.called_at,
             };
 
-            setLiveGame((prev) => ({
-                ...prev,
-                last_call: newCall,
-                calls: [...(prev.calls || []), newCall],
-            }));
+            setLiveGame((prev) => {
+                const exists = prev.calls?.some((c) => c.sequence_index === event.sequence_index);
+                return {
+                    ...prev,
+                    last_call: newCall,
+                    calls: exists ? prev.calls : [...(prev.calls || []), newCall],
+                };
+            });
 
             setLiveRemaining(event.remaining_count);
 
@@ -424,6 +483,18 @@ export default function GameShow({
         });
 
         channel.listen('.game.state.changed', (event: any) => {
+            if (event.status === 'paused') {
+                playVoice('game_paused.wav');
+            } else if (event.status === 'active') {
+                if (event.previous_status === 'paused') {
+                    playVoice('game_resumed.wav');
+                } else {
+                    playVoice('game_started.wav');
+                }
+            } else if (event.status === 'completed') {
+                playVoice('game_over.wav');
+            }
+
             setLiveGame((prev) => ({
                 ...prev,
                 status: event.status,
@@ -435,6 +506,7 @@ export default function GameShow({
         });
 
         channel.listen('.game.won', () => {
+            playVoice('winner.wav');
             router.reload({ only: ['game'] });
         });
 
@@ -443,6 +515,7 @@ export default function GameShow({
         });
 
         channel.listen('.bingo.claim.rejected', () => {
+            playVoice('not_winner.wav');
             router.reload({ only: ['game'] });
         });
 
@@ -455,47 +528,101 @@ export default function GameShow({
             channel.stopListening('.bingo.claim.rejected');
             window.Echo.leave(channelName);
         };
-    }, [game.id, tenant?.id]);
+    }, [game.id, tenant?.id, voiceEnabled, voiceGender]);
 
     const handleTransition = (targetStatus: string) => {
-        if (confirm(`Are you sure you want to transition game to ${targetStatus.toUpperCase()}?`)) {
-            router.patch(`/c/${companySlug}/admin/games/${game.id}/status`, {
-                status: targetStatus,
-            });
+        // Enforce: Cannot start game if any joined online player has no assigned card
+        if (targetStatus === 'active' || targetStatus === 'starting') {
+            if (liveGame.status === 'open' || liveGame.status === 'draft') {
+                const unassigned = (liveGame.players || []).filter(
+                    (p) => p.user && !liveGame.cards.some((c) => c.user_id === p.user?.id)
+                );
+
+                if (unassigned.length > 0) {
+                    setUnassignedPlayersList(unassigned);
+                    setUnassignedWarningModalOpen(true);
+                    return;
+                }
+
+                playVoice('game_started.wav');
+            } else if (liveGame.status === 'paused') {
+                playVoice('game_resumed.wav');
+            }
+        } else if (targetStatus === 'paused') {
+            playVoice('game_paused.wav');
+        } else if (targetStatus === 'completed') {
+            playVoice('game_over.wav');
         }
+
+        // Seamless status transition without disruptive confirm dialogs
+        router.patch(`/c/${companySlug}/admin/games/${game.id}/status`, {
+            status: targetStatus,
+        }, {
+            preserveScroll: true,
+        });
     };
 
-    const handleCallNext = () => {
+    const handleCallNext = async () => {
+        if (calling) return;
         setCalling(true);
-        router.post(
-            `/c/${companySlug}/admin/games/${game.id}/call-next`,
-            {},
-            {
-                preserveScroll: true,
-                onFinish: () => setCalling(false),
+        try {
+            const res = await axios.post(
+                `/c/${companySlug}/admin/games/${game.id}/call-next`,
+                {},
+                {
+                    headers: {
+                        Accept: 'application/json',
+                    },
+                }
+            );
+
+            if (res.data?.success && res.data?.call) {
+                const call = res.data.call;
+                lastPlayedSeqRef.current = call.sequence_index;
+                playVoice(`${call.letter}${call.ball_number}.wav`);
+
+                setLiveGame((prev) => {
+                    const exists = prev.calls?.some((c) => c.sequence_index === call.sequence_index);
+                    return {
+                        ...prev,
+                        last_call: call,
+                        calls: exists ? prev.calls : [...(prev.calls || []), call],
+                    };
+                });
+
+                if (res.data.remaining_count !== undefined) {
+                    setLiveRemaining(res.data.remaining_count);
+                }
+
+                if (res.data.master_board) {
+                    setLiveBoard(res.data.master_board);
+                }
+            } else if (res.data?.message) {
+                console.log(res.data.message);
             }
-        );
+        } catch (err: any) {
+            console.error('Call next error:', err);
+            const errMsg = err.response?.data?.error || err.message;
+            if (errMsg) {
+                console.warn(errMsg);
+            }
+        } finally {
+            setCalling(false);
+        }
     };
 
     // Auto-calling timer loop in browser if enabled by operator
     useEffect(() => {
         let timer: NodeJS.Timeout;
-        if (autoCallActive && liveGame.status === 'active' && liveRemaining > 0) {
+        if (autoCallActive && liveGame.status === 'active' && liveRemaining > 0 && !calling) {
             timer = setTimeout(() => {
-                router.post(
-                    `/c/${companySlug}/admin/games/${game.id}/call-next`,
-                    {},
-                    {
-                        preserveScroll: true,
-                        onError: () => setAutoCallActive(false),
-                    }
-                );
+                handleCallNext();
             }, (liveGame.call_interval || 5) * 1000);
         } else if (liveRemaining === 0 || liveGame.status !== 'active') {
             setAutoCallActive(false);
         }
         return () => clearTimeout(timer);
-    }, [autoCallActive, liveGame.status, liveGame.calls.length, liveRemaining]);
+    }, [autoCallActive, liveGame.status, liveRemaining, liveGame.call_interval, calling]);
 
     const latestCall = game.last_call || (game.calls && game.calls.length > 0 ? game.calls[game.calls.length - 1] : null);
 
@@ -538,63 +665,101 @@ export default function GameShow({
                         </span>
                     </div>
 
-                    {/* Operator Control Actions */}
-                    <div className="flex items-center space-x-2">
-                        {liveGame.status === 'draft' && (
+                    {/* Operator Control Actions & Audio Toolbar */}
+                    <div className="flex flex-wrap items-center gap-2">
+                        {/* Amharic Voice Engine Toolbar */}
+                        <div className="flex items-center bg-neutral-900 border border-neutral-800 rounded-xl px-2 py-1 space-x-1.5 text-xs">
                             <button
-                                onClick={() => handleTransition('open')}
-                                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md transition"
+                                type="button"
+                                onClick={toggleVoice}
+                                className={`px-2 py-1 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer ${
+                                    voiceEnabled
+                                        ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40'
+                                        : 'bg-neutral-800 text-neutral-400 border border-neutral-700'
+                                }`}
+                                title={voiceEnabled ? 'Mute Amharic Voice' : 'Unmute Amharic Voice'}
                             >
-                                Open Room for Players
+                                <span>{voiceEnabled ? '🔊' : '🔇'}</span>
+                                <span className="hidden sm:inline">{voiceEnabled ? 'Voice ON' : 'Voice OFF'}</span>
                             </button>
+                            {voiceEnabled && (
+                                <select
+                                    value={voiceGender}
+                                    onChange={(e) => changeVoiceGender(e.target.value as 'ma' | 'fm')}
+                                    className="bg-neutral-950 border border-neutral-700 text-neutral-300 text-xs rounded-lg px-2 py-1 focus:ring-amber-500 cursor-pointer"
+                                    title="Caller Voice Profile (Amharic)"
+                                >
+                                    <option value="ma">👨 Male (AM)</option>
+                                    <option value="fm">👩 Female (AM)</option>
+                                </select>
+                            )}
+                        </div>
+
+                        {is_observer && (
+                            <span className="px-3 py-1 bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5">
+                                <span>👁️</span> Observer Mode
+                            </span>
                         )}
 
-                        {liveGame.status === 'open' && (
+                        {!is_observer && (
                             <>
-                                <button
-                                    onClick={() => handleTransition('active')}
-                                    className="bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold px-4 py-2 rounded-xl shadow-md transition"
-                                >
-                                    Start Live Game
-                                </button>
-                                <button
-                                    onClick={() => handleTransition('cancelled')}
-                                    className="bg-neutral-800 hover:bg-rose-900/50 hover:text-rose-300 text-neutral-300 text-xs font-semibold px-3 py-2 rounded-xl transition"
-                                >
-                                    Cancel Game
-                                </button>
-                            </>
-                        )}
+                                {liveGame.status === 'draft' && (
+                                    <button
+                                        onClick={() => handleTransition('open')}
+                                        className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md transition cursor-pointer"
+                                    >
+                                        Open Room for Players
+                                    </button>
+                                )}
 
-                        {liveGame.status === 'active' && (
-                            <>
-                                <button
-                                    onClick={() => handleTransition('paused')}
-                                    className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition"
-                                >
-                                    Pause Session
-                                </button>
-                                <button
-                                    onClick={() => handleTransition('completed')}
-                                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition"
-                                >
-                                    Complete Game
-                                </button>
+                                {liveGame.status === 'open' && (
+                                    <>
+                                        <button
+                                            onClick={() => handleTransition('active')}
+                                            className="bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold px-4 py-2 rounded-xl shadow-md transition cursor-pointer"
+                                        >
+                                            Start Live Game
+                                        </button>
+                                        <button
+                                            onClick={() => handleTransition('cancelled')}
+                                            className="bg-neutral-800 hover:bg-rose-900/50 hover:text-rose-300 text-neutral-300 text-xs font-semibold px-3 py-2 rounded-xl transition cursor-pointer"
+                                        >
+                                            Cancel Game
+                                        </button>
+                                    </>
+                                )}
+
+                                {liveGame.status === 'active' && (
+                                    <>
+                                        <button
+                                            onClick={() => handleTransition('paused')}
+                                            className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
+                                        >
+                                            Pause Session
+                                        </button>
+                                        <button
+                                            onClick={() => handleTransition('completed')}
+                                            className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
+                                        >
+                                            Complete Game
+                                        </button>
+                                    </>
+                                )}
+                                {liveGame.status === 'paused' && (
+                                    <button
+                                        onClick={() => handleTransition('active')}
+                                        className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
+                                    >
+                                        Resume Session
+                                    </button>
+                                )}
                             </>
-                        )}
-                        {liveGame.status === 'paused' && (
-                            <button
-                                onClick={() => handleTransition('active')}
-                                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition"
-                            >
-                                Resume Session
-                            </button>
                         )}
 
                         <button
                             type="button"
                             onClick={() => setLookupModalOpen(true)}
-                            className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm"
+                            className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer"
                         >
                             <span>🔍</span> Check Card
                         </button>
@@ -643,13 +808,53 @@ export default function GameShow({
                             <span className="text-xs text-neutral-400 font-mono">
                                 Pot: <strong className="text-emerald-400 font-bold">${((liveGame.entry_fee * (liveGame.players?.length || liveGame.cards?.length || 0)) / 100).toFixed(2)}</strong>
                             </span>
+                            {is_observer && (
+                                <span className="px-2.5 py-1 bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-[10px] font-bold">
+                                    👁️ Observer View
+                                </span>
+                            )}
                         </div>
 
                         <div className="flex items-center space-x-2">
+                            {/* Fullscreen Voice Engine Toggle */}
+                            <button
+                                type="button"
+                                onClick={toggleVoice}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border cursor-pointer ${
+                                    voiceEnabled
+                                        ? 'bg-emerald-600/30 text-emerald-300 border-emerald-500/40'
+                                        : 'bg-neutral-800 text-neutral-400 border-neutral-700'
+                                }`}
+                                title={voiceEnabled ? 'Mute Voice' : 'Unmute Voice'}
+                            >
+                                <span>{voiceEnabled ? '🔊' : '🔇'}</span>
+                                <span>{voiceEnabled ? (voiceGender === 'ma' ? 'AM Male' : 'AM Female') : 'Muted'}</span>
+                            </button>
+
+                            {/* Fullscreen Pause / Resume Controls for host */}
+                            {!is_observer && liveGame.status === 'active' && (
+                                <button
+                                    type="button"
+                                    onClick={() => handleTransition('paused')}
+                                    className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-3.5 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow cursor-pointer"
+                                >
+                                    <span>⏸️</span> Pause Game
+                                </button>
+                            )}
+                            {!is_observer && liveGame.status === 'paused' && (
+                                <button
+                                    type="button"
+                                    onClick={() => handleTransition('active')}
+                                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow cursor-pointer"
+                                >
+                                    <span>▶️</span> Resume Game
+                                </button>
+                            )}
+
                             <button
                                 type="button"
                                 onClick={() => setLookupModalOpen(true)}
-                                className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold px-3.5 py-1.5 rounded-xl transition flex items-center gap-1.5 border border-neutral-700"
+                                className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold px-3.5 py-1.5 rounded-xl transition flex items-center gap-1.5 border border-neutral-700 cursor-pointer"
                             >
                                 <span>🔍</span> Check Card
                             </button>
@@ -663,6 +868,26 @@ export default function GameShow({
                         </div>
                     </div>
                 )}
+                {/* Observer Mode Alert Banner */}
+                {is_observer && (
+                    <div className="p-4 rounded-2xl bg-sky-950/40 border border-sky-500/40 text-sky-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-md">
+                        <div className="flex items-center gap-3">
+                            <span className="text-2xl">👁️</span>
+                            <div>
+                                <div className="font-bold text-sm text-sky-100">
+                                    Observer Mode Active — Hosted by {liveGame.creator?.name || 'Game Manager'}
+                                </div>
+                                <div className="text-xs text-sky-300/80">
+                                    You have real-time live visibility of calls, cards, and claims. Gameplay control and mutating actions are reserved strictly for the host Game Manager.
+                                </div>
+                            </div>
+                        </div>
+                        <span className="px-3 py-1 bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-mono font-bold uppercase whitespace-nowrap self-start sm:self-auto">
+                            Read-Only Observer
+                        </span>
+                    </div>
+                )}
+
                 {/* Pending Bingo Claims Alert Banner */}
                 {pendingWinners.length > 0 && (
                     <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/20 via-yellow-500/20 to-amber-500/20 border-2 border-amber-500 text-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
@@ -753,29 +978,48 @@ export default function GameShow({
                                 </div>
 
                                 {/* Caller Controls */}
-                                {liveGame.status === 'active' && (
-                                    <div className="flex flex-col gap-2 pt-4 border-t border-neutral-800/80 mt-4">
-                                        <button
-                                            onClick={handleCallNext}
-                                            disabled={calling || liveRemaining === 0}
-                                            className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 font-black px-4 py-3 rounded-xl shadow-lg shadow-amber-500/20 text-sm flex items-center justify-center space-x-1.5 transition cursor-pointer"
-                                        >
-                                            <span>{calling ? 'Drawing...' : 'Call Next Ball'}</span>
-                                            <span className="text-[10px] bg-neutral-950/20 px-1.5 py-0.5 rounded font-mono">1..75</span>
-                                        </button>
-
-                                        <button
-                                            onClick={() => setAutoCallActive(!autoCallActive)}
-                                            className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 border whitespace-nowrap cursor-pointer ${
-                                                autoCallActive
-                                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
-                                                    : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
-                                            }`}
-                                        >
-                                            <span className={`w-2 h-2 rounded-full ${autoCallActive ? 'bg-rose-400 animate-ping' : 'bg-neutral-500'}`} />
-                                            <span>{autoCallActive ? 'Stop Auto-Call' : `Auto-Call (${liveGame.call_interval}s)`}</span>
-                                        </button>
+                                {is_observer ? (
+                                    <div className="w-full bg-sky-950/40 border border-sky-500/30 rounded-xl p-3 text-center text-xs text-sky-300 mt-4">
+                                        <span>👁️ Observer View &bull; Hosted by {liveGame.creator?.name || 'Game Manager'}</span>
                                     </div>
+                                ) : (
+                                    <>
+                                        {liveGame.status === 'active' && (
+                                            <div className="flex flex-col gap-2 pt-4 border-t border-neutral-800/80 mt-4">
+                                                <button
+                                                    onClick={handleCallNext}
+                                                    disabled={calling || liveRemaining === 0}
+                                                    className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 font-black px-4 py-3 rounded-xl shadow-lg shadow-amber-500/20 text-sm flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                                >
+                                                    <span>{calling ? 'Drawing...' : 'Call Next Ball'}</span>
+                                                    <span className="text-[10px] bg-neutral-950/20 px-1.5 py-0.5 rounded font-mono">1..75</span>
+                                                </button>
+
+                                                <button
+                                                    onClick={() => setAutoCallActive(!autoCallActive)}
+                                                    className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 border whitespace-nowrap cursor-pointer ${
+                                                        autoCallActive
+                                                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                                                            : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                                                    }`}
+                                                >
+                                                    <span className={`w-2 h-2 rounded-full ${autoCallActive ? 'bg-rose-400 animate-ping' : 'bg-neutral-500'}`} />
+                                                    <span>{autoCallActive ? 'Stop Auto-Call' : `Auto-Call (${liveGame.call_interval}s)`}</span>
+                                                </button>
+                                            </div>
+                                        )}
+                                        {liveGame.status === 'paused' && (
+                                            <div className="flex flex-col gap-2 pt-4 border-t border-neutral-800/80 mt-4">
+                                                <div className="text-amber-400 text-xs font-bold text-center">Game Paused</div>
+                                                <button
+                                                    onClick={() => handleTransition('active')}
+                                                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black px-4 py-3 rounded-xl shadow-lg text-sm flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                                >
+                                                    <span>▶️ Resume Game</span>
+                                                </button>
+                                            </div>
+                                        )}
+                                    </>
                                 )}
                             </div>
 
@@ -888,29 +1132,35 @@ export default function GameShow({
                                 </div>
 
                                 {/* Caller Controls */}
-                                {liveGame.status === 'active' && (
-                                    <div className="flex items-center gap-2 pt-1">
-                                        <button
-                                            onClick={handleCallNext}
-                                            disabled={calling || liveRemaining === 0}
-                                            className="flex-1 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 font-black px-4 py-2.5 rounded-xl shadow-lg shadow-amber-500/20 text-xs sm:text-sm flex items-center justify-center space-x-1.5 transition cursor-pointer"
-                                        >
-                                            <span>{calling ? 'Drawing...' : 'Call Next Ball'}</span>
-                                            <span className="text-[10px] bg-neutral-950/20 px-1.5 py-0.5 rounded font-mono">1..75</span>
-                                        </button>
-
-                                        <button
-                                            onClick={() => setAutoCallActive(!autoCallActive)}
-                                            className={`px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 border whitespace-nowrap cursor-pointer ${
-                                                autoCallActive
-                                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
-                                                    : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
-                                            }`}
-                                        >
-                                            <span className={`w-2 h-2 rounded-full ${autoCallActive ? 'bg-rose-400 animate-ping' : 'bg-neutral-500'}`} />
-                                            <span>{autoCallActive ? 'Stop Auto' : `Auto (${liveGame.call_interval}s)`}</span>
-                                        </button>
+                                {is_observer ? (
+                                    <div className="w-full bg-sky-950/40 border border-sky-500/30 rounded-xl p-2.5 text-center text-xs text-sky-300">
+                                        <span>👁️ Observer View &bull; Hosted by {liveGame.creator?.name || 'Game Manager'}</span>
                                     </div>
+                                ) : (
+                                    liveGame.status === 'active' && (
+                                        <div className="flex items-center gap-2 pt-1">
+                                            <button
+                                                onClick={handleCallNext}
+                                                disabled={calling || liveRemaining === 0}
+                                                className="flex-1 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 font-black px-4 py-2.5 rounded-xl shadow-lg shadow-amber-500/20 text-xs sm:text-sm flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                            >
+                                                <span>{calling ? 'Drawing...' : 'Call Next Ball'}</span>
+                                                <span className="text-[10px] bg-neutral-950/20 px-1.5 py-0.5 rounded font-mono">1..75</span>
+                                            </button>
+
+                                            <button
+                                                onClick={() => setAutoCallActive(!autoCallActive)}
+                                                className={`px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 border whitespace-nowrap cursor-pointer ${
+                                                    autoCallActive
+                                                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                                                        : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                                                }`}
+                                            >
+                                                <span className={`w-2 h-2 rounded-full ${autoCallActive ? 'bg-rose-400 animate-ping' : 'bg-neutral-500'}`} />
+                                                <span>{autoCallActive ? 'Stop Auto' : `Auto (${liveGame.call_interval}s)`}</span>
+                                            </button>
+                                        </div>
+                                    )
                                 )}
                             </div>
 
@@ -1130,15 +1380,46 @@ export default function GameShow({
                                     <span className="text-xs font-mono text-indigo-400 font-semibold">
                                         {liveGame.players.length} joined
                                     </span>
-                                    <button
-                                        type="button"
-                                        onClick={() => openAssignModal()}
-                                        className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 transition shadow-sm"
-                                    >
-                                        <span>➕</span> Assign Card
-                                    </button>
+                                    {!is_observer && (
+                                        <button
+                                            type="button"
+                                            onClick={() => openAssignModal()}
+                                            className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 transition shadow-sm cursor-pointer"
+                                        >
+                                            <span>➕</span> Assign Card
+                                        </button>
+                                    )}
                                 </div>
                             </div>
+
+                            {/* Alert banner if room has unassigned players and game is open */}
+                            {liveGame.status === 'open' && (liveGame.players || []).some((p) => p.user && !liveGame.cards.some((c) => c.user_id === p.user?.id)) && (
+                                <div className="mb-4 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2.5 text-amber-300 text-xs">
+                                        <span className="text-lg">⚠️</span>
+                                        <div>
+                                            <span className="font-bold">Card Assignment Required:</span>{' '}
+                                            {(liveGame.players || []).filter((p) => p.user && !liveGame.cards.some((c) => c.user_id === p.user?.id)).length} player(s) joined without a card. All players must have a card assigned before the game can start.
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const firstUnassigned = (liveGame.players || []).find((p) => p.user && !liveGame.cards.some((c) => c.user_id === p.user?.id));
+                                            if (firstUnassigned) {
+                                                openAssignModal({
+                                                    id: firstUnassigned.user?.id || null,
+                                                    name: firstUnassigned.user?.name || '',
+                                                    isWalkIn: false,
+                                                });
+                                            }
+                                        }}
+                                        className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs transition shadow cursor-pointer whitespace-nowrap self-start sm:self-auto"
+                                    >
+                                        Assign Card Now &rarr;
+                                    </button>
+                                </div>
+                            )}
 
                             <div className="overflow-x-auto max-h-[380px] overflow-y-auto rounded-2xl border border-neutral-800/80">
                                 <table className="min-w-full divide-y divide-neutral-800 text-sm">
@@ -1171,8 +1452,7 @@ export default function GameShow({
 
                                                 const assignedCard = liveGame.cards.find(
                                                     (c) => (c.user_id && playerItem.user?.id && c.user_id === playerItem.user.id) ||
-                                                           (c.guest_identifier && c.guest_identifier === playerItem.guest_identifier) ||
-                                                           (c.id === playerItem.id)
+                                                           (c.guest_identifier && playerItem.guest_identifier && c.guest_identifier === playerItem.guest_identifier)
                                                 );
 
                                                 return (
@@ -1202,7 +1482,9 @@ export default function GameShow({
                                                                     #{String(assignedCard.card.card_number).padStart(6, '0')}
                                                                 </span>
                                                             ) : (
-                                                                <span className="text-neutral-500 italic">No card assigned</span>
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold uppercase tracking-wide animate-pulse">
+                                                                    <span>⚠️</span> No Card Assigned
+                                                                </span>
                                                             )}
                                                         </td>
                                                         <td className="px-4 py-3 text-indigo-400 font-semibold">
@@ -1226,19 +1508,25 @@ export default function GameShow({
                                                                         Check BINGO
                                                                     </button>
                                                                 )}
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => openAssignModal({
-                                                                        id: playerItem.user?.id || null,
-                                                                        name: displayName,
-                                                                        isWalkIn: isWalkInPlayer,
-                                                                        guestIdentifier: playerItem.guest_identifier || '',
-                                                                        currentCard: assignedCard?.card?.card_number,
-                                                                    })}
-                                                                    className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-400 hover:text-amber-300 font-bold text-xs transition border border-neutral-700"
-                                                                >
-                                                                    {assignedCard ? 'Change Card' : 'Assign Card'}
-                                                                </button>
+                                                                {!is_observer && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => openAssignModal({
+                                                                            id: playerItem.user?.id || null,
+                                                                            name: displayName,
+                                                                            isWalkIn: isWalkInPlayer,
+                                                                            guestIdentifier: playerItem.guest_identifier || '',
+                                                                            currentCard: assignedCard?.card?.card_number,
+                                                                        })}
+                                                                        className={`px-2.5 py-1 rounded-lg font-bold text-xs transition border cursor-pointer ${
+                                                                            assignedCard
+                                                                                ? 'bg-neutral-800 hover:bg-neutral-700 text-amber-400 hover:text-amber-300 border-neutral-700'
+                                                                                : 'bg-amber-500 hover:bg-amber-400 text-neutral-950 border-amber-400 shadow font-black'
+                                                                        }`}
+                                                                    >
+                                                                        {assignedCard ? 'Change Card' : '+ Assign Card'}
+                                                                    </button>
+                                                                )}
                                                             </div>
                                                         </td>
                                                     </tr>
@@ -1355,19 +1643,21 @@ export default function GameShow({
 
                                 <div>
                                     <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                                        Target Card Number <span className="text-rose-400">*</span>
+                                        Target Card Number {isWalkIn ? <span className="text-rose-400">*</span> : <span className="text-neutral-500">(Optional - leave blank to auto-assign)</span>}
                                     </label>
                                     <input
                                         type="number"
                                         min="1"
-                                        required
+                                        required={isWalkIn}
                                         value={targetCardNumber}
                                         onChange={(e) => setTargetCardNumber(e.target.value)}
-                                        placeholder="e.g. 42 or 100"
+                                        placeholder={isWalkIn ? 'e.g. 42 or 100' : 'e.g. 42 or leave blank for next available'}
                                         className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-600 focus:border-indigo-500 focus:outline-none"
                                     />
                                     <p className="text-[11px] text-neutral-500 mt-1">
-                                        Input the exact card number from inventory (e.g. 1 to {available_cards_count || 1000})
+                                        {isWalkIn
+                                            ? `Input the physical card number handed to customer (e.g. 1 to ${available_cards_count || 1000})`
+                                            : `Select a specific card number or leave blank to automatically draw the next available card from inventory.`}
                                     </p>
                                 </div>
 
@@ -1406,10 +1696,16 @@ export default function GameShow({
                                     </button>
                                     <button
                                         type="submit"
-                                        disabled={assigningCard || (!isWalkIn && !selectedUserId) || !targetCardNumber}
+                                        disabled={assigningCard || (!isWalkIn && !selectedUserId) || (isWalkIn && !targetCardNumber)}
                                         className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs disabled:opacity-50 transition shadow-sm"
                                     >
-                                        {assigningCard ? 'Assigning...' : 'Assign Card'}
+                                        {assigningCard
+                                            ? 'Assigning...'
+                                            : targetCardNumber
+                                                ? `Assign Card #${targetCardNumber}`
+                                                : isWalkIn
+                                                    ? 'Assign Card'
+                                                    : 'Auto-Assign Next Available Card'}
                                     </button>
                                 </div>
                             </form>
@@ -1551,46 +1847,111 @@ export default function GameShow({
                                             Close
                                         </button>
 
-                                        {/* If verifying a pending winner claim */}
-                                        {verificationData.winner_id ? (
+                                        {/* If observer mode, actions are disabled */}
+                                        {is_observer ? (
+                                            <div className="px-4 py-2.5 rounded-xl bg-amber-950/40 border border-amber-800 text-amber-300 text-xs font-medium text-center">
+                                                Observer Mode: Only the host manager can resolve claims or declare winners.
+                                            </div>
+                                        ) : (
                                             <>
-                                                <button
-                                                    type="button"
-                                                    onClick={handleRejectClaim}
-                                                    disabled={resolvingClaim}
-                                                    className="px-4 py-2.5 rounded-xl bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-700 font-bold text-xs transition disabled:opacity-50"
-                                                >
-                                                    {resolvingClaim ? 'Rejecting...' : 'Reject False Claim & Allow Resume'}
-                                                </button>
-                                                {verificationData.is_valid && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={handleConfirmClaim}
-                                                        disabled={resolvingClaim}
-                                                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition shadow-lg disabled:opacity-50 flex items-center gap-1.5"
-                                                    >
-                                                        <span>✓</span>
-                                                        <span>{resolvingClaim ? 'Finalizing...' : 'Confirm Valid Win & Finalize Game'}</span>
-                                                    </button>
+                                                {/* If verifying a pending winner claim */}
+                                                {verificationData.winner_id ? (
+                                                    <>
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleRejectClaim}
+                                                            disabled={resolvingClaim}
+                                                            className="px-4 py-2.5 rounded-xl bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-700 font-bold text-xs transition disabled:opacity-50"
+                                                        >
+                                                            {resolvingClaim ? 'Rejecting...' : 'Reject False Claim & Allow Resume'}
+                                                        </button>
+                                                        {verificationData.is_valid && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleConfirmClaim}
+                                                                disabled={resolvingClaim}
+                                                                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition shadow-lg disabled:opacity-50 flex items-center gap-1.5"
+                                                            >
+                                                                <span>✓</span>
+                                                                <span>{resolvingClaim ? 'Finalizing...' : 'Confirm Valid Win & Finalize Game'}</span>
+                                                            </button>
+                                                        )}
+                                                    </>
+                                                ) : (
+                                                    /* If inspecting a walk-in card */
+                                                    verificationData.is_valid && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleDeclareWalkInWinner}
+                                                            disabled={resolvingClaim}
+                                                            className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition shadow-lg disabled:opacity-50 flex items-center gap-1.5"
+                                                        >
+                                                            <span>✓</span>
+                                                            <span>{resolvingClaim ? 'Finalizing...' : 'Declare Walk-in Winner & Finalize Game'}</span>
+                                                        </button>
+                                                    )
                                                 )}
                                             </>
-                                        ) : (
-                                            /* If inspecting a walk-in card */
-                                            verificationData.is_valid && (
-                                                <button
-                                                    type="button"
-                                                    onClick={handleDeclareWalkInWinner}
-                                                    disabled={resolvingClaim}
-                                                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition shadow-lg disabled:opacity-50 flex items-center gap-1.5"
-                                                >
-                                                    <span>✓</span>
-                                                    <span>{resolvingClaim ? 'Finalizing...' : 'Declare Walk-in Winner & Finalize Game'}</span>
-                                                </button>
-                                            )
                                         )}
                                     </div>
                                 </div>
                             ) : null}
+                        </div>
+                    </div>
+                )}
+
+                {/* Unassigned Players Prompt Modal */}
+                {unassignedWarningModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                        <div className="bg-neutral-900 border border-amber-500/40 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-xl text-amber-300">
+                                    ⚠️
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-bold text-white">Cannot Start Game</h3>
+                                    <p className="text-xs text-amber-300">All players must have an assigned card</p>
+                                </div>
+                            </div>
+
+                            <p className="text-xs text-neutral-300">
+                                You cannot start or activate this game until every player who joined has been assigned a card. Please assign cards to the following player(s):
+                            </p>
+
+                            <div className="max-h-56 overflow-y-auto space-y-2 rounded-2xl bg-neutral-950 p-3 border border-neutral-800">
+                                {unassignedPlayersList.map((p) => (
+                                    <div key={p.id} className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-neutral-900 border border-neutral-800">
+                                        <div>
+                                            <div className="text-xs font-bold text-white">{p.user?.name || 'Player'}</div>
+                                            <div className="text-[10px] text-neutral-500 font-mono">{p.user?.email}</div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setUnassignedWarningModalOpen(false);
+                                                openAssignModal({
+                                                    id: p.user?.id || null,
+                                                    name: p.user?.name || '',
+                                                    isWalkIn: false,
+                                                });
+                                            }}
+                                            className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs transition cursor-pointer shadow"
+                                        >
+                                            Assign Card &rarr;
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="flex justify-end pt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setUnassignedWarningModalOpen(false)}
+                                    className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
                         </div>
                     </div>
                 )}

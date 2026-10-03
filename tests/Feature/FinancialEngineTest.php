@@ -12,7 +12,6 @@ use App\Domains\Financial\Services\PrizeCalculationService;
 use App\Domains\Financial\Services\PrizeDistributionService;
 use App\Domains\Games\Models\Game;
 use App\Domains\Games\Models\GameCall;
-use App\Domains\Games\Models\GameCard;
 use App\Domains\Games\Models\GameTemplate;
 use App\Domains\Games\Services\CardAssignmentService;
 use App\Domains\Games\Services\GameLifecycleService;
@@ -203,7 +202,7 @@ class FinancialEngineTest extends TestCase
         $this->lifecycleService->openGame($game);
 
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
         $this->lifecycleService->startGame($game);
 
         // Player's balance after entry fee: $20 - $5 = $15 (1500 cents)
@@ -260,7 +259,7 @@ class FinancialEngineTest extends TestCase
         $this->cardGenerator->generateBatch($this->company, 5);
         $this->lifecycleService->openGame($game);
         $this->assignmentService->joinGame($game, $player);
-        $gameCard = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->firstOrFail();
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
 
         $winner = GameWinner::create([
             'company_id' => $this->company->id,
@@ -301,10 +300,9 @@ class FinancialEngineTest extends TestCase
         $this->lifecycleService->openGame($game);
 
         $this->assignmentService->joinGame($game, $player1);
+        $card1 = $this->assignmentService->assignCardToPlayer($game, $player1);
         $this->assignmentService->joinGame($game, $player2);
-
-        $card1 = GameCard::where('game_id', $game->id)->where('user_id', $player1->id)->firstOrFail();
-        $card2 = GameCard::where('game_id', $game->id)->where('user_id', $player2->id)->firstOrFail();
+        $card2 = $this->assignmentService->assignCardToPlayer($game, $player2);
 
         $this->lifecycleService->startGame($game);
 

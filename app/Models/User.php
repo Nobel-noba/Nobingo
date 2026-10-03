@@ -7,6 +7,7 @@ use App\Domains\Auth\Traits\HasRoles;
 use App\Domains\Financial\Models\Transaction;
 use App\Domains\Games\Models\Game;
 use App\Domains\Tenancy\Models\Company;
+use App\Domains\Tenancy\Models\GameManagerPlayer;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -86,5 +87,21 @@ class User extends Authenticatable
     public function mustResetPassword(): bool
     {
         return (bool) ($this->must_reset_password ?? false);
+    }
+
+    /**
+     * Players authorized under this game manager.
+     */
+    public function managerPlayers(): HasMany
+    {
+        return $this->hasMany(GameManagerPlayer::class, 'game_manager_id');
+    }
+
+    /**
+     * Managers this player is authorized under.
+     */
+    public function playerManagers(): HasMany
+    {
+        return $this->hasMany(GameManagerPlayer::class, 'player_id');
     }
 }

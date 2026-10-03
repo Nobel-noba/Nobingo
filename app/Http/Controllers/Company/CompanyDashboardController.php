@@ -64,6 +64,7 @@ class CompanyDashboardController extends Controller
                 'total_net_house' => null,
                 'formatted_net_house' => null,
                 'pending_player_deposits_count' => 0,
+                'has_low_credit' => false,
             ];
 
             $recentGames = (clone $myGames)
@@ -125,6 +126,7 @@ class CompanyDashboardController extends Controller
                 'total_net_house' => $totalNetHouse,
                 'formatted_net_house' => '$'.number_format($totalNetHouse / 100, 2),
                 'pending_player_deposits_count' => $pendingDeposits,
+                'has_low_credit' => (int) $company->credit_balance <= 0,
             ];
 
             $recentGames = Game::where('company_id', $company->id)

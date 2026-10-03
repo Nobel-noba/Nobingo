@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Company;
 
 use App\Domains\Audit\Models\AuditLog;
+use App\Domains\Auth\Models\Role;
 use App\Domains\Tenancy\Models\Company;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -18,6 +20,7 @@ class AuditLogController extends Controller
     {
         $action = $request->query('action');
         $search = $request->query('search');
+        $managerFilter = $request->query('manager_id');
 
         $user = $request->user();
         $isGameManagerOnly = $user->isGameManager() && ! $user->isCompanyAdmin() && ! $user->isPlatformOwner();
@@ -28,6 +31,8 @@ class AuditLogController extends Controller
 
         if ($isGameManagerOnly) {
             $query->where('user_id', $user->id);
+        } elseif ($managerFilter) {
+            $query->where('user_id', $managerFilter);
         }
 
         if ($action && $action !== 'ALL') {
@@ -60,6 +65,14 @@ class AuditLogController extends Controller
             'created_at' => $log->created_at->format('M d, Y H:i:s'),
         ]);
 
+        $gameManagers = ! $isGameManagerOnly
+            ? User::where('company_id', $company->id)
+                ->whereHas('roles', fn ($q) => $q->where('slug', Role::GAME_MANAGER))
+                ->select(['id', 'name', 'email'])
+                ->orderBy('name')
+                ->get()
+            : [];
+
         return Inertia::render('Company/AuditLogs/Index', [
             'company' => [
                 'id' => $company->id,
@@ -70,7 +83,10 @@ class AuditLogController extends Controller
             'filters' => [
                 'action' => $action ?? 'ALL',
                 'search' => $search ?? '',
+                'manager_id' => $managerFilter ?? '',
             ],
+            'game_managers' => $gameManagers,
+            'is_game_manager_view' => $isGameManagerOnly,
         ]);
     }
 }

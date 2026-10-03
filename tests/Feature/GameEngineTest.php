@@ -139,11 +139,15 @@ class GameEngineTest extends TestCase
         $this->assertSame(100, $gamePlayer->entry_fee_paid);
         $this->assertSame(900, $player->fresh()->balance); // Balance decremented
 
-        // Verify card assignment
+        // Upon join, player is not assigned a card by default
         $assignedCard = GameCard::where('game_id', $game->id)->where('user_id', $player->id)->first();
-        $this->assertNotNull($assignedCard);
-        $this->assertNotNull($assignedCard->bingo_card_id);
-        $this->assertSame(BingoCard::STATUS_ASSIGNED, $assignedCard->card->status);
+        $this->assertNull($assignedCard);
+
+        // Card is explicitly assigned by Game Manager
+        $gameCard = $this->assignmentService->assignCardToPlayer($game, $player);
+        $this->assertInstanceOf(GameCard::class, $gameCard);
+        $this->assertNotNull($gameCard->bingo_card_id);
+        $this->assertSame(BingoCard::STATUS_ASSIGNED, $gameCard->card->fresh()->status);
     }
 
     public function test_same_card_cannot_be_assigned_twice_in_same_game(): void
@@ -160,14 +164,18 @@ class GameEngineTest extends TestCase
         $player1 = User::factory()->create(['company_id' => $company->id, 'balance' => 500]);
         $player2 = User::factory()->create(['company_id' => $company->id, 'balance' => 500]);
 
-        // Player 1 joins successfully and gets the only card
+        // Player 1 joins successfully and is assigned the only card
         $this->assignmentService->joinGame($game, $player1);
+        $this->assignmentService->assignCardToPlayer($game, $player1);
 
-        // Player 2 attempts to join, but no available cards remain in inventory
+        // Player 2 joins successfully without card
+        $this->assignmentService->joinGame($game, $player2);
+
+        // Attempting to assign card to Player 2 fails because no cards remain in inventory
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('No available cards in company inventory');
 
-        $this->assignmentService->joinGame($game, $player2);
+        $this->assignmentService->assignCardToPlayer($game, $player2);
     }
 
     public function test_card_is_released_when_game_completes_and_reusable_for_future_game(): void
@@ -184,6 +192,7 @@ class GameEngineTest extends TestCase
 
         $player1 = User::factory()->create(['company_id' => $company->id, 'balance' => 500]);
         $this->assignmentService->joinGame($game1, $player1);
+        $this->assignmentService->assignCardToPlayer($game1, $player1);
 
         $this->assertSame(BingoCard::STATUS_ASSIGNED, $card->fresh()->status);
 
@@ -200,12 +209,31 @@ class GameEngineTest extends TestCase
 
         $player2 = User::factory()->create(['company_id' => $company->id, 'balance' => 500]);
         $this->assignmentService->joinGame($game2, $player2);
+        $this->assignmentService->assignCardToPlayer($game2, $player2);
 
         $this->assertSame(BingoCard::STATUS_ASSIGNED, $card->fresh()->status);
 
         // Historical record for Game 1 is still permanent
         $this->assertDatabaseHas('game_cards', ['game_id' => $game1->id, 'bingo_card_id' => $card->id]);
         $this->assertDatabaseHas('game_cards', ['game_id' => $game2->id, 'bingo_card_id' => $card->id]);
+    }
+
+    public function test_game_cannot_start_without_assigning_cards_to_all_joined_players(): void
+    {
+        $company = Company::create(['name' => 'Acme Bingo', 'slug' => 'acme-bingo', 'status' => 'active']);
+        $template = GameTemplate::firstOrFail();
+        $this->cardGenerator->generateBatch($company, 2);
+
+        $game = $this->lifecycleService->createFromTemplate($template, $company);
+        $this->lifecycleService->openGame($game);
+
+        $player = User::factory()->create(['name' => 'Abebe', 'company_id' => $company->id, 'balance' => 500]);
+        $this->assignmentService->joinGame($game, $player);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Cannot start game: 1 player (Abebe) have not been assigned cards');
+
+        $this->lifecycleService->startGame($game);
     }
 
     public function test_player_cannot_join_game_with_insufficient_balance(): void

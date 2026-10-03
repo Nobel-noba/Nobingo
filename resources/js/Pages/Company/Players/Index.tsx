@@ -15,6 +15,13 @@ interface PlayerItem {
     created_at: string;
 }
 
+interface AvailablePlayer {
+    id: number;
+    name: string;
+    email: string;
+    formatted_balance: string;
+}
+
 interface Props extends PageProps {
     company: {
         id: number;
@@ -28,23 +35,38 @@ interface Props extends PageProps {
         total: number;
         links: Array<{ url: string | null; label: string; active: boolean }>;
     };
+    available_players?: AvailablePlayer[];
+    is_game_manager_view?: boolean;
     filters: {
         search: string;
         status: string;
     };
 }
 
-export default function PlayersIndex({ auth, company, players, filters }: Props) {
+export default function PlayersIndex({ auth, company, players, available_players = [], is_game_manager_view = false, filters }: Props) {
+    const isGameManagerOnly = Boolean(is_game_manager_view || (auth.user?.is_game_manager && !auth.user?.is_company_admin && !auth.user?.is_platform_owner));
     const [search, setSearch] = useState(filters.search || '');
     const [selectedStatus, setSelectedStatus] = useState(filters.status || 'all');
     const [adjustingPlayer, setAdjustingPlayer] = useState<PlayerItem | null>(null);
+    const [withdrawPlayer, setWithdrawPlayer] = useState<PlayerItem | null>(null);
     const [registerModalOpen, setRegisterModalOpen] = useState(false);
+    const [authorizeModalOpen, setAuthorizeModalOpen] = useState(false);
     const [resetPassPlayer, setResetPassPlayer] = useState<PlayerItem | null>(null);
 
     const adjustForm = useForm({
         amount: 10,
         is_credit: true,
         reason: 'Administrative courtesy',
+    });
+
+    const withdrawForm = useForm({
+        amount: 10,
+        notes: 'Counter cash withdrawal',
+    });
+
+    const authorizeForm = useForm({
+        player_id: '',
+        initial_deposit: 0,
     });
 
     const registerForm = useForm({
@@ -77,6 +99,30 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
     const handleToggleStatus = (playerId: number) => {
         router.patch(`/c/${company.slug}/admin/players/${playerId}/toggle-status`, {}, {
             preserveScroll: true,
+        });
+    };
+
+    const handleWithdrawSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!withdrawPlayer) return;
+
+        withdrawForm.post(`/c/${company.slug}/admin/players/${withdrawPlayer.id}/withdraw`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setWithdrawPlayer(null);
+                withdrawForm.reset();
+            },
+        });
+    };
+
+    const handleAuthorizeSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        authorizeForm.post(`/c/${company.slug}/admin/players/authorize-existing`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setAuthorizeModalOpen(false);
+                authorizeForm.reset();
+            },
         });
     };
 
@@ -126,25 +172,53 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
                     <div>
                         <h1 className="text-2xl font-bold text-white tracking-tight">Player Directory & Moderation</h1>
                         <p className="text-sm text-neutral-400 mt-1">
-                            Register new players, issue temporary credentials, manage account status, and perform adjustments.
+                            {isGameManagerOnly
+                                ? 'Authorize company players for your games, provision new accounts, and disburse cash deposits & withdrawals.'
+                                : 'Register new players, issue temporary credentials, manage account status, and perform adjustments.'}
                         </p>
                     </div>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            registerForm.setData({
-                                name: '',
-                                email: '',
-                                password: generateRandomPassword(),
-                                initial_deposit: 0,
-                            });
-                            setRegisterModalOpen(true);
-                        }}
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md flex items-center gap-2 transition self-start sm:self-auto cursor-pointer"
-                    >
-                        <span>+ Register New Player</span>
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                        {isGameManagerOnly && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    authorizeForm.reset();
+                                    setAuthorizeModalOpen(true);
+                                }}
+                                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md flex items-center gap-2 transition cursor-pointer"
+                            >
+                                <span>➕ Authorize Existing Player</span>
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={() => {
+                                registerForm.setData({
+                                    name: '',
+                                    email: '',
+                                    password: generateRandomPassword(),
+                                    initial_deposit: 0,
+                                });
+                                setRegisterModalOpen(true);
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md flex items-center gap-2 transition cursor-pointer"
+                        >
+                            <span>+ Register New Player</span>
+                        </button>
+                    </div>
                 </div>
+
+                {isGameManagerOnly && (
+                    <div className="bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-4 flex items-start gap-3 text-xs text-indigo-200">
+                        <span className="text-lg">🛡️</span>
+                        <div>
+                            <strong className="text-white block font-semibold mb-0.5">Isolated Game Manager Roster & Wallets</strong>
+                            <p className="text-indigo-300">
+                                You only see players authorized for your games. Wallet balances shown here are strictly isolated to your games. Deposits and cash withdrawals made here stay within your custody and audit trail.
+                            </p>
+                        </div>
+                    </div>
+                )}
 
                 {/* Filter & Search Bar */}
                 <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
@@ -194,7 +268,7 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
                                 <tr>
                                     <th className="px-4 py-3">Player</th>
                                     <th className="px-4 py-3">Status</th>
-                                    <th className="px-4 py-3">Wallet Balance</th>
+                                    <th className="px-4 py-3">{isGameManagerOnly ? 'Manager Wallet' : 'Wallet Balance'}</th>
                                     <th className="px-4 py-3">Games</th>
                                     <th className="px-4 py-3">Wins</th>
                                     <th className="px-4 py-3">Joined</th>
@@ -248,8 +322,19 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
                                                 <button
                                                     onClick={() => setAdjustingPlayer(player)}
                                                     className="text-xs bg-indigo-950/60 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/60 px-2.5 py-1 rounded transition"
+                                                    title="Deposit / adjust funds"
                                                 >
-                                                    Adjust $
+                                                    Deposit $
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        setWithdrawPlayer(player);
+                                                        withdrawForm.setData({ amount: 10, notes: 'Counter cash withdrawal' });
+                                                    }}
+                                                    className="text-xs bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-700/60 px-2.5 py-1 rounded transition"
+                                                    title="Disburse counter cash withdrawal"
+                                                >
+                                                    Cash Out
                                                 </button>
                                                 <button
                                                     onClick={() => {
@@ -261,16 +346,18 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
                                                 >
                                                     Reset Pass
                                                 </button>
-                                                <button
-                                                    onClick={() => handleToggleStatus(player.id)}
-                                                    className={`text-xs px-2.5 py-1 rounded transition border ${
-                                                        player.status === 'active'
-                                                            ? 'bg-rose-950/60 hover:bg-rose-900 text-rose-300 border-rose-700/60'
-                                                            : 'bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border-emerald-700/60'
-                                                    }`}
-                                                >
-                                                    {player.status === 'active' ? 'Suspend' : 'Activate'}
-                                                </button>
+                                                {!isGameManagerOnly && (
+                                                    <button
+                                                        onClick={() => handleToggleStatus(player.id)}
+                                                        className={`text-xs px-2.5 py-1 rounded transition border ${
+                                                            player.status === 'active'
+                                                                ? 'bg-rose-950/60 hover:bg-rose-900 text-rose-300 border-rose-700/60'
+                                                                : 'bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border-emerald-700/60'
+                                                        }`}
+                                                    >
+                                                        {player.status === 'active' ? 'Suspend' : 'Activate'}
+                                                    </button>
+                                                )}
                                             </td>
                                         </tr>
                                     ))
@@ -571,6 +658,167 @@ export default function PlayersIndex({ auth, company, players, filters }: Props)
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Counter Cash Withdrawal Modal */}
+            {withdrawPlayer && (
+                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+                        <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
+                            <h3 className="font-bold text-white text-base flex items-center gap-2">
+                                <span>💵</span>
+                                <span>Counter Cash Out / Withdrawal</span>
+                            </h3>
+                            <button
+                                onClick={() => setWithdrawPlayer(null)}
+                                className="text-neutral-400 hover:text-white text-xs font-bold"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="text-xs text-neutral-300">
+                            Disbursing cash to <strong className="text-white">{withdrawPlayer.name}</strong>. Current isolated balance with you: <span className="text-emerald-400 font-mono font-bold">{withdrawPlayer.formatted_balance}</span>.
+                        </div>
+
+                        <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-3 text-xs text-rose-300">
+                            This cash withdrawal will deduct from the player's balance under your manager account, update your walk-in/counter cash records, and log an immutable financial audit transaction.
+                        </div>
+
+                        <form onSubmit={handleWithdrawSubmit} className="space-y-4 text-xs">
+                            <div>
+                                <label className="block uppercase font-bold text-neutral-400 mb-1">Withdrawal Amount ($ USD)</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="50000"
+                                    step="0.01"
+                                    required
+                                    value={withdrawForm.data.amount}
+                                    onChange={(e) => withdrawForm.setData('amount', parseFloat(e.target.value) || 0)}
+                                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono text-base font-bold focus:ring-rose-500 focus:border-rose-500"
+                                />
+                                {withdrawForm.errors.amount && (
+                                    <div className="text-rose-400 text-[11px] mt-1">{withdrawForm.errors.amount}</div>
+                                )}
+                            </div>
+
+                            <div>
+                                <label className="block uppercase font-bold text-neutral-400 mb-1">Notes / Disbursal Reason</label>
+                                <input
+                                    type="text"
+                                    value={withdrawForm.data.notes}
+                                    onChange={(e) => withdrawForm.setData('notes', e.target.value)}
+                                    placeholder="e.g. In-person counter cash payout"
+                                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:ring-rose-500 focus:border-rose-500"
+                                />
+                            </div>
+
+                            <div className="flex justify-end space-x-2 pt-2 border-t border-neutral-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setWithdrawPlayer(null)}
+                                    className="px-4 py-2 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-800"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={withdrawForm.processing}
+                                    className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 transition shadow"
+                                >
+                                    {withdrawForm.processing ? 'Processing...' : 'Disburse Cash'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Authorize Existing Player Modal */}
+            {authorizeModalOpen && (
+                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+                        <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
+                            <h3 className="font-bold text-white text-base flex items-center gap-2">
+                                <span>➕</span>
+                                <span>Authorize Existing Company Player</span>
+                            </h3>
+                            <button
+                                onClick={() => setAuthorizeModalOpen(false)}
+                                className="text-neutral-400 hover:text-white text-xs font-bold"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <p className="text-xs text-neutral-400">
+                            Add a player already registered in this company to your roster so they can view and join your games.
+                        </p>
+
+                        {available_players.length === 0 ? (
+                            <div className="p-4 bg-neutral-950 border border-neutral-800 rounded-xl text-center text-xs text-neutral-400">
+                                All registered company players are already on your game roster.
+                            </div>
+                        ) : (
+                            <form onSubmit={handleAuthorizeSubmit} className="space-y-4 text-xs">
+                                <div>
+                                    <label className="block uppercase font-bold text-neutral-400 mb-1">Select Player</label>
+                                    <select
+                                        required
+                                        value={authorizeForm.data.player_id}
+                                        onChange={(e) => authorizeForm.setData('player_id', e.target.value)}
+                                        className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:ring-indigo-500 focus:border-indigo-500"
+                                    >
+                                        <option value="">-- Choose a player --</option>
+                                        {available_players.map((p) => (
+                                            <option key={p.id} value={p.id}>
+                                                {p.name} ({p.email})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    {authorizeForm.errors.player_id && (
+                                        <div className="text-rose-400 text-[11px] mt-1">{authorizeForm.errors.player_id}</div>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <label className="block uppercase font-bold text-neutral-400 mb-1">Initial Cash Deposit ($ USD, optional)</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="50000"
+                                        step="0.01"
+                                        value={authorizeForm.data.initial_deposit}
+                                        onChange={(e) => authorizeForm.setData('initial_deposit', parseFloat(e.target.value) || 0)}
+                                        className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-indigo-500 focus:border-indigo-500"
+                                        placeholder="0.00"
+                                    />
+                                    <p className="text-[11px] text-neutral-500 mt-1">
+                                        Funds deposited here are credited directly to the player's wallet under your management.
+                                    </p>
+                                </div>
+
+                                <div className="flex justify-end space-x-2 pt-2 border-t border-neutral-800">
+                                    <button
+                                        type="button"
+                                        onClick={() => setAuthorizeModalOpen(false)}
+                                        className="px-4 py-2 rounded-lg text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-800"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={authorizeForm.processing || !authorizeForm.data.player_id}
+                                        className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition shadow disabled:opacity-50"
+                                    >
+                                        {authorizeForm.processing ? 'Authorizing...' : 'Authorize Player'}
+                                    </button>
+                                </div>
+                            </form>
+                        )}
                     </div>
                 </div>
             )}

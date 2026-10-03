@@ -34,20 +34,25 @@ interface Props extends PageProps {
     filters: {
         action: string;
         search: string;
+        manager_id?: string;
     };
+    game_managers?: Array<{ id: number; name: string; email: string }>;
+    is_game_manager_view?: boolean;
 }
 
-export default function AuditLogsIndex({ auth, company, logs, filters }: Props) {
+export default function AuditLogsIndex({ auth, company, logs, filters, game_managers = [], is_game_manager_view = false }: Props) {
     const [search, setSearch] = useState(filters.search || '');
     const [selectedAction, setSelectedAction] = useState(filters.action || 'ALL');
+    const [selectedManager, setSelectedManager] = useState(filters.manager_id || '');
     const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
 
-    const handleFilter = (actionVal: string, searchVal: string) => {
+    const handleFilter = (actionVal: string, searchVal: string, managerVal: string = selectedManager) => {
         router.get(
             `/c/${company.slug}/admin/audit-logs`,
             {
                 action: actionVal !== 'ALL' ? actionVal : undefined,
                 search: searchVal || undefined,
+                manager_id: managerVal || undefined,
             },
             { preserveState: true }
         );
@@ -85,29 +90,52 @@ export default function AuditLogsIndex({ auth, company, logs, filters }: Props) 
                 </div>
 
                 {/* Filter & Search Bar */}
-                <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
-                    <div className="flex items-center space-x-3">
-                        <span className="text-xs font-semibold text-neutral-400 uppercase">Action:</span>
-                        <select
-                            value={selectedAction}
-                            onChange={(e) => {
-                                setSelectedAction(e.target.value);
-                                handleFilter(e.target.value, search);
-                            }}
-                            className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2"
-                        >
-                            <option value="ALL">All Actions</option>
-                            <option value="GAME_CREATED">Game Created</option>
-                            <option value="GAME_STATUS_CHANGED">Game Status Changed</option>
-                            <option value="BALL_CALLED">Ball Called</option>
-                            <option value="BINGO_CLAIMED">Bingo Claimed</option>
-                            <option value="WINNER_DECLARED">Winner Declared</option>
-                            <option value="PRIZE_DISTRIBUTED">Prize Distributed</option>
-                            <option value="BALANCE_ADJUSTED">Balance Adjusted</option>
-                            <option value="PLAYER_SUSPENDED">Player Suspended</option>
-                            <option value="PLAYER_ACTIVATED">Player Activated</option>
-                            <option value="TEMPLATE_CREATED">Template Created</option>
-                        </select>
+                <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center space-x-2">
+                            <span className="text-xs font-semibold text-neutral-400 uppercase">Action:</span>
+                            <select
+                                value={selectedAction}
+                                onChange={(e) => {
+                                    setSelectedAction(e.target.value);
+                                    handleFilter(e.target.value, search, selectedManager);
+                                }}
+                                className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2"
+                            >
+                                <option value="ALL">All Actions</option>
+                                <option value="GAME_CREATED">Game Created</option>
+                                <option value="GAME_STATUS_CHANGED">Game Status Changed</option>
+                                <option value="BALL_CALLED">Ball Called</option>
+                                <option value="BINGO_CLAIMED">Bingo Claimed</option>
+                                <option value="WINNER_DECLARED">Winner Declared</option>
+                                <option value="PRIZE_DISTRIBUTED">Prize Distributed</option>
+                                <option value="BALANCE_ADJUSTED">Balance Adjusted</option>
+                                <option value="PLAYER_SUSPENDED">Player Suspended</option>
+                                <option value="PLAYER_ACTIVATED">Player Activated</option>
+                                <option value="TEMPLATE_CREATED">Template Created</option>
+                            </select>
+                        </div>
+
+                        {!is_game_manager_view && game_managers.length > 0 && (
+                            <div className="flex items-center space-x-2">
+                                <span className="text-xs font-semibold text-neutral-400 uppercase">Operator:</span>
+                                <select
+                                    value={selectedManager}
+                                    onChange={(e) => {
+                                        setSelectedManager(e.target.value);
+                                        handleFilter(selectedAction, search, e.target.value);
+                                    }}
+                                    className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2"
+                                >
+                                    <option value="">All Operators</option>
+                                    {game_managers.map((m) => (
+                                        <option key={m.id} value={m.id}>
+                                            {m.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
                     </div>
 
                     <div className="flex items-center space-x-2">
@@ -118,13 +146,13 @@ export default function AuditLogsIndex({ auth, company, logs, filters }: Props) 
                             onChange={(e) => setSearch(e.target.value)}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
-                                    handleFilter(selectedAction, search);
+                                    handleFilter(selectedAction, search, selectedManager);
                                 }
                             }}
                             className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2 w-72 focus:ring-indigo-500 focus:border-indigo-500"
                         />
                         <button
-                            onClick={() => handleFilter(selectedAction, search)}
+                            onClick={() => handleFilter(selectedAction, search, selectedManager)}
                             className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
                         >
                             Filter

@@ -8,6 +8,7 @@ use App\Domains\Financial\Services\LedgerService;
 use App\Domains\Games\Events\GameStateChanged;
 use App\Domains\Games\Models\Game;
 use App\Domains\Games\Models\GameCard;
+use App\Domains\Games\Models\GamePlayer;
 use App\Domains\Games\Models\GameTemplate;
 use App\Domains\Platform\Models\PlatformSetting;
 use App\Domains\Tenancy\Models\Company;
@@ -15,6 +16,7 @@ use App\Domains\Winners\Models\GameWinner;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use RuntimeException;
 
 class GameLifecycleService
 {
@@ -98,6 +100,27 @@ class GameLifecycleService
         }
 
         $previousStatus = $game->status;
+
+        // When starting or activating a game from draft or open, verify that all joined registered players have an assigned card
+        if (in_array($targetStatus, [Game::STATUS_STARTING, Game::STATUS_ACTIVE], true) && in_array($previousStatus, [Game::STATUS_DRAFT, Game::STATUS_OPEN], true)) {
+            $assignedUserIds = GameCard::where('game_id', $game->id)
+                ->whereNull('released_at')
+                ->whereNotNull('user_id')
+                ->pluck('user_id');
+
+            $unassignedPlayers = GamePlayer::where('game_id', $game->id)
+                ->whereNotNull('user_id')
+                ->whereNotIn('user_id', $assignedUserIds)
+                ->with('user')
+                ->get();
+
+            if ($unassignedPlayers->isNotEmpty()) {
+                $names = $unassignedPlayers->map(fn ($p) => $p->user?->name ?? "Player #{$p->user_id}")->join(', ');
+                $count = $unassignedPlayers->count();
+                $noun = $count === 1 ? 'player' : 'players';
+                throw new RuntimeException("Cannot start game: {$count} {$noun} ({$names}) have not been assigned cards. Please assign a card to each player before starting.");
+            }
+        }
 
         DB::transaction(function () use ($game, $targetStatus) {
             $updates = ['status' => $targetStatus];

@@ -24,6 +24,13 @@ class GameAuditController extends Controller
             abort(404, 'Game does not belong to this company.');
         }
 
+        $user = request()->user();
+        if ($user && $user->isGameManager() && ! $user->isCompanyAdmin() && ! $user->isPlatformOwner()) {
+            if ((int) $game->created_by !== (int) $user->id) {
+                abort(403, 'Unauthorized. Game managers can only access the audit of games they started.');
+            }
+        }
+
         // 1. Called Numbers Sequence
         $calls = GameCall::where('game_id', $game->id)
             ->orderBy('sequence_index')

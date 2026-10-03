@@ -1,6 +1,6 @@
 import PlayerLayout from '@/Layouts/PlayerLayout';
 import { PageProps } from '@/types';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import React, { useState, useEffect, useRef } from 'react';
 
 interface GameCallInfo {
@@ -55,7 +55,7 @@ interface WinnerAnnouncement {
 
 interface Props extends PageProps {
     game: GameInfo;
-    player_card: PlayerCardInfo;
+    player_card: PlayerCardInfo | null;
     master_board?: Record<string, Array<{ number: number; is_called: boolean }>>;
 }
 
@@ -139,8 +139,8 @@ const synth = new SoundSynthesizer();
 export default function GameRoom({ game: initialGame, player_card: initialCard, tenant }: Props) {
     const companySlug = tenant?.slug || 'default';
     const [game, setGame] = useState(initialGame);
-    const [card, setCard] = useState(initialCard);
-    const [markedPositions, setMarkedPositions] = useState<[number, number][]>(initialCard.marked_positions || [[2, 2]]);
+    const [card, setCard] = useState<PlayerCardInfo | null>(initialCard);
+    const [markedPositions, setMarkedPositions] = useState<[number, number][]>(initialCard?.marked_positions || [[2, 2]]);
     const [daubError, setDaubError] = useState<string | null>(null);
     const [claiming, setClaiming] = useState(false);
     const [claimPending, setClaimPending] = useState(false);
@@ -171,7 +171,7 @@ export default function GameRoom({ game: initialGame, player_card: initialCard, 
     useEffect(() => {
         setGame(initialGame);
         setCard(initialCard);
-        setMarkedPositions(initialCard.marked_positions || [[2, 2]]);
+        setMarkedPositions(initialCard?.marked_positions || [[2, 2]]);
     }, [initialGame, initialCard]);
 
     // Live WebSockets subscription via Laravel Reverb & Echo
@@ -214,14 +214,16 @@ export default function GameRoom({ game: initialGame, player_card: initialCard, 
             }));
 
             // Auto-mark card if matching number exists
-            const currentGrid = card.grid || [];
-            for (let r = 0; r < 5; r++) {
-                for (let c = 0; c < 5; c++) {
-                    if (currentGrid[r]?.[c] === event.ball_number) {
-                        setMarkedPositions((prev) => {
-                            if (prev.some(([pr, pc]) => pr === r && pc === c)) return prev;
-                            return [...prev, [r, c]];
-                        });
+            if (card) {
+                const currentGrid = card.grid || [];
+                for (let r = 0; r < 5; r++) {
+                    for (let c = 0; c < 5; c++) {
+                        if (currentGrid[r]?.[c] === event.ball_number) {
+                            setMarkedPositions((prev) => {
+                                if (prev.some(([pr, pc]) => pr === r && pc === c)) return prev;
+                                return [...prev, [r, c]];
+                            });
+                        }
                     }
                 }
             }
@@ -235,6 +237,7 @@ export default function GameRoom({ game: initialGame, player_card: initialCard, 
             if (event.status === 'active') {
                 setClaimPending(false);
             }
+            router.reload({ only: ['player_card', 'game'] });
         });
 
         channel.listen('.player.joined', (event: any) => {
@@ -242,6 +245,7 @@ export default function GameRoom({ game: initialGame, player_card: initialCard, 
                 ...prev,
                 players_count: event.players_count,
             }));
+            router.reload({ only: ['player_card', 'game'] });
         });
 
         channel.listen('.bingo.claim.rejected', (event: any) => {
@@ -272,10 +276,10 @@ export default function GameRoom({ game: initialGame, player_card: initialCard, 
             channel.stopListening('.game.won');
             window.Echo.leave(channelName);
         };
-    }, [game.id, tenant?.id, card.grid, isMuted]);
+    }, [game.id, tenant?.id, card?.grid, isMuted]);
 
     const handleClaimBingo = async () => {
-        if (game.status !== 'active' || claiming || claimPending) return;
+        if (!card || game.status !== 'active' || claiming || claimPending) return;
 
         setClaiming(true);
         setClaimError(null);
@@ -356,12 +360,12 @@ export default function GameRoom({ game: initialGame, player_card: initialCard, 
     };
 
     const isCellLastCalled = (row: number, col: number) => {
-        if (!game.last_call) return false;
+        if (!card || !game.last_call) return false;
         return card.grid[row]?.[col] === game.last_call.ball_number;
     };
 
     const handleDaub = async (row: number, col: number) => {
-        if (isCellMarked(row, col)) return;
+        if (!card || isCellMarked(row, col)) return;
         setDaubError(null);
 
         try {
@@ -548,102 +552,126 @@ export default function GameRoom({ game: initialGame, player_card: initialCard, 
                 )}
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                    {/* Left Column: Fixed 5x5 Bingo Card */}
+                    {/* Left Column: Fixed 5x5 Bingo Card or Awaiting Card State */}
                     <div className="lg:col-span-6 flex flex-col items-center">
-                        <div className="w-full max-w-md bg-slate-950 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl">
-                            <div className="flex justify-between items-center mb-4">
-                                <div>
-                                    <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">
-                                        Persistent Fixed Card
-                                    </span>
-                                    <h3 className="text-xl font-black text-white">{card.card_number}</h3>
+                        {!card ? (
+                            <div className="w-full max-w-md bg-slate-950 border border-slate-800 rounded-3xl p-8 shadow-2xl text-center space-y-5">
+                                <div className="w-20 h-20 rounded-3xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center text-4xl mx-auto shadow-inner animate-pulse">
+                                    📇
                                 </div>
-                                <div className="flex items-center space-x-2">
-                                    <span className="text-xs font-mono text-emerald-400 font-bold px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-                                        {markedPositions.length} Marked
-                                    </span>
-                                    <span className="text-xs font-mono text-slate-400 font-semibold px-2 py-1 rounded-lg bg-slate-900 border border-slate-800">
-                                        v{card.version}
-                                    </span>
+                                <div className="space-y-2">
+                                    <h3 className="text-xl font-black text-white">Awaiting Card Assignment</h3>
+                                    <p className="text-xs text-slate-400 leading-relaxed max-w-xs mx-auto">
+                                        You have successfully joined this game! The host manager will allocate a bingo card to your account before starting the game.
+                                    </p>
                                 </div>
-                            </div>
-
-                            {/* 5x5 Card Matrix with Touch Daubing */}
-                            <div className="grid grid-cols-5 gap-2 sm:gap-2.5" role="grid" aria-label="Bingo Card Matrix">
-                                {columnHeaders.map((col, idx) => (
-                                    <div
-                                        key={col}
-                                        className={`h-10 sm:h-12 rounded-xl flex items-center justify-center font-black text-base sm:text-lg border shadow-sm select-none ${columnColors[idx]}`}
-                                    >
-                                        {col}
-                                    </div>
-                                ))}
-
-                                {card.grid.map((row, rIdx) =>
-                                    row.map((cell, cIdx) => {
-                                        const isCenter = rIdx === 2 && cIdx === 2;
-                                        const marked = isCellMarked(rIdx, cIdx);
-                                        const isLastCalledMatch = isCellLastCalled(rIdx, cIdx);
-
-                                        return (
-                                            <button
-                                                key={`${rIdx}-${cIdx}`}
-                                                type="button"
-                                                onClick={() => handleDaub(rIdx, cIdx)}
-                                                disabled={marked}
-                                                aria-label={isCenter ? 'Free Space' : `Number ${cell}${marked ? ', Daubed' : ''}`}
-                                                className={`aspect-square rounded-2xl flex flex-col items-center justify-center font-bold text-sm sm:text-base border transition relative overflow-hidden select-none active:scale-95 ${
-                                                    marked
-                                                        ? 'bg-gradient-to-tr from-amber-500 to-amber-600 text-neutral-950 font-black border-amber-300 shadow-lg shadow-amber-500/20 ring-2 ring-amber-400/40'
-                                                        : isLastCalledMatch
-                                                        ? 'bg-indigo-900/60 border-indigo-400 text-white animate-pulse ring-2 ring-indigo-400'
-                                                        : 'bg-slate-900/90 hover:bg-slate-800/90 border-slate-800 text-white'
-                                                }`}
-                                            >
-                                                {/* Daub Stamp Ink Blot Effect */}
-                                                {marked && (
-                                                    <span className="absolute inset-0 bg-amber-400/20 rounded-full blur-sm pointer-events-none" />
-                                                )}
-
-                                                <span className="relative z-10 text-base sm:text-lg">
-                                                    {isCenter ? '★ FREE' : cell}
-                                                </span>
-
-                                                {marked && !isCenter && (
-                                                    <span className="text-[8px] uppercase tracking-tighter opacity-80 font-black relative z-10">
-                                                        DAUBED
-                                                    </span>
-                                                )}
-                                            </button>
-                                        );
-                                    })
-                                )}
-                            </div>
-
-                            <div className="mt-3.5 text-center text-[10px] text-slate-500">
-                                Tap matching cells to daub &bull; Automatic server daubing active
-                            </div>
-
-                            {/* BINGO Claim Button */}
-                            <div className="mt-5 space-y-2">
+                                <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center gap-2 text-xs text-amber-300 font-bold">
+                                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                                    <span>Game status: <span className="uppercase">{game.status}</span></span>
+                                </div>
                                 <button
                                     type="button"
-                                    onClick={handleClaimBingo}
-                                    disabled={game.status !== 'active' || claiming || claimPending}
-                                    className={`w-full py-4 rounded-2xl font-black text-xl tracking-widest uppercase transition transform active:scale-95 shadow-xl flex items-center justify-center space-x-2 ${
-                                        game.status === 'active' && !claiming && !claimPending
-                                            ? 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 shadow-amber-500/30 hover:shadow-amber-500/50 hover:brightness-110 animate-pulse cursor-pointer'
-                                            : 'bg-slate-800 text-slate-500 cursor-not-allowed shadow-none'
-                                    }`}
+                                    onClick={() => router.reload({ only: ['player_card', 'game'] })}
+                                    className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition shadow cursor-pointer"
                                 >
-                                    {claiming ? (
-                                        <span>VERIFYING CLAIM...</span>
-                                    ) : claimPending ? (
-                                        <span>VERIFICATION IN PROGRESS...</span>
-                                    ) : (
-                                        <span>BINGO! CLAIM WIN</span>
-                                    )}
+                                    ↻ Check for Assigned Card
                                 </button>
+                            </div>
+                        ) : (
+                            <div className="w-full max-w-md bg-slate-950 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl">
+                                <div className="flex justify-between items-center mb-4">
+                                    <div>
+                                        <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">
+                                            Persistent Fixed Card
+                                        </span>
+                                        <h3 className="text-xl font-black text-white">{card.card_number}</h3>
+                                    </div>
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-xs font-mono text-emerald-400 font-bold px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                                            {markedPositions.length} Marked
+                                        </span>
+                                        <span className="text-xs font-mono text-slate-400 font-semibold px-2 py-1 rounded-lg bg-slate-900 border border-slate-800">
+                                            v{card.version}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* 5x5 Card Matrix with Touch Daubing */}
+                                <div className="grid grid-cols-5 gap-2 sm:gap-2.5" role="grid" aria-label="Bingo Card Matrix">
+                                    {columnHeaders.map((col, idx) => (
+                                        <div
+                                            key={col}
+                                            className={`h-10 sm:h-12 rounded-xl flex items-center justify-center font-black text-base sm:text-lg border shadow-sm select-none ${columnColors[idx]}`}
+                                        >
+                                            {col}
+                                        </div>
+                                    ))}
+
+                                    {card.grid.map((row, rIdx) =>
+                                        row.map((cell, cIdx) => {
+                                            const isCenter = rIdx === 2 && cIdx === 2;
+                                            const marked = isCellMarked(rIdx, cIdx);
+                                            const isLastCalledMatch = isCellLastCalled(rIdx, cIdx);
+
+                                            return (
+                                                <button
+                                                    key={`${rIdx}-${cIdx}`}
+                                                    type="button"
+                                                    onClick={() => handleDaub(rIdx, cIdx)}
+                                                    disabled={marked}
+                                                    aria-label={isCenter ? 'Free Space' : `Number ${cell}${marked ? ', Daubed' : ''}`}
+                                                    className={`aspect-square rounded-2xl flex flex-col items-center justify-center font-bold text-sm sm:text-base border transition relative overflow-hidden select-none active:scale-95 ${
+                                                        marked
+                                                            ? 'bg-gradient-to-tr from-amber-500 to-amber-600 text-neutral-950 font-black border-amber-300 shadow-lg shadow-amber-500/20 ring-2 ring-amber-400/40'
+                                                            : isLastCalledMatch
+                                                            ? 'bg-indigo-900/60 border-indigo-400 text-white animate-pulse ring-2 ring-indigo-400'
+                                                            : 'bg-slate-900/90 hover:bg-slate-800/90 border-slate-800 text-white'
+                                                    }`}
+                                                >
+                                                    {/* Daub Stamp Ink Blot Effect */}
+                                                    {marked && (
+                                                        <span className="absolute inset-0 bg-amber-400/20 rounded-full blur-sm pointer-events-none" />
+                                                    )}
+
+                                                    <span className="relative z-10 text-base sm:text-lg">
+                                                        {isCenter ? '★ FREE' : cell}
+                                                    </span>
+
+                                                    {marked && !isCenter && (
+                                                        <span className="text-[8px] uppercase tracking-tighter opacity-80 font-black relative z-10">
+                                                            DAUBED
+                                                        </span>
+                                                    )}
+                                                </button>
+                                            );
+                                        })
+                                    )}
+                                </div>
+
+                                <div className="mt-3.5 text-center text-[10px] text-slate-500">
+                                    Tap matching cells to daub &bull; Automatic server daubing active
+                                </div>
+
+                                {/* BINGO Claim Button */}
+                                <div className="mt-5 space-y-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleClaimBingo}
+                                        disabled={game.status !== 'active' || claiming || claimPending}
+                                        className={`w-full py-4 rounded-2xl font-black text-xl tracking-widest uppercase transition transform active:scale-95 shadow-xl flex items-center justify-center space-x-2 ${
+                                            game.status === 'active' && !claiming && !claimPending
+                                                ? 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 shadow-amber-500/30 hover:shadow-amber-500/50 hover:brightness-110 animate-pulse cursor-pointer'
+                                                : 'bg-slate-800 text-slate-500 cursor-not-allowed shadow-none'
+                                        }`}
+                                    >
+                                        {claiming ? (
+                                            <span>VERIFYING CLAIM...</span>
+                                        ) : claimPending ? (
+                                            <span>VERIFICATION IN PROGRESS...</span>
+                                        ) : (
+                                            <span>BINGO! CLAIM WIN</span>
+                                        )}
+                                    </button>
 
                                 {claimPending && (
                                     <div className="p-4 bg-amber-500/10 border-2 border-amber-500/40 rounded-2xl text-center text-xs text-amber-300 font-bold animate-pulse" role="status">
@@ -664,7 +692,8 @@ export default function GameRoom({ game: initialGame, player_card: initialCard, 
                                 )}
                             </div>
                         </div>
-                    </div>
+                    )}
+                </div>
 
                     {/* Right Column: 1-75 Master Board & Match Rules */}
                     <div className="lg:col-span-6 space-y-6">

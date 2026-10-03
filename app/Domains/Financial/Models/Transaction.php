@@ -38,6 +38,7 @@ class Transaction extends Model
     protected $fillable = [
         'company_id',
         'user_id',
+        'game_manager_id',
         'type',
         'amount',
         'currency',
@@ -78,6 +79,14 @@ class Transaction extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * The game manager responsible for / associated with this transaction.
+     */
+    public function gameManager(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'game_manager_id');
     }
 
     /**

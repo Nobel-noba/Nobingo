@@ -20,12 +20,24 @@ interface TransactionItem {
     description: string | null;
     is_credit: boolean;
     is_debit: boolean;
+    is_walkin?: boolean;
     user: {
         id: number;
         name: string;
         email: string;
     } | null;
+    game_manager?: {
+        id: number;
+        name: string;
+        email: string;
+    } | null;
     created_at: string;
+}
+
+interface ManagerItem {
+    id: number;
+    name: string;
+    email: string;
 }
 
 interface Props extends PageProps {
@@ -34,6 +46,8 @@ interface Props extends PageProps {
         name: string;
         slug: string;
     };
+    is_game_manager?: boolean;
+    managers?: ManagerItem[];
     transactions: {
         data: TransactionItem[];
         current_page: number;
@@ -52,6 +66,14 @@ interface Props extends PageProps {
         formatted_deposits: string;
         withdrawals: number;
         formatted_withdrawals: string;
+        walkin_sales?: number;
+        formatted_walkin_sales?: string;
+        walkin_prizes?: number;
+        formatted_walkin_prizes?: string;
+        walkin_net_cash?: number;
+        formatted_walkin_net_cash?: string;
+        period_net_cash?: number;
+        formatted_period_net_cash?: string;
         pending_payouts: number;
         formatted_pending_payouts: string;
         net_house_earnings: number;
@@ -60,25 +82,56 @@ interface Props extends PageProps {
     filters: {
         type: string;
         search: string;
+        manager_id?: string;
+        start_date?: string;
+        end_date?: string;
     };
 }
 
-export default function LedgerIndex({ auth, company, transactions, statistics, filters }: Props) {
+export default function LedgerIndex({ auth, company, is_game_manager, managers = [], transactions, statistics, filters }: Props) {
     const [searchTerm, setSearchTerm] = useState(filters.search || '');
     const [selectedType, setSelectedType] = useState(filters.type || 'ALL');
+    const [selectedManager, setSelectedManager] = useState(filters.manager_id || '');
+    const [startDate, setStartDate] = useState(filters.start_date || '');
+    const [endDate, setEndDate] = useState(filters.end_date || '');
 
-    const handleFilterChange = (type: string, search: string) => {
+    const handleFilterChange = (
+        type = selectedType,
+        search = searchTerm,
+        managerId = selectedManager,
+        sDate = startDate,
+        eDate = endDate
+    ) => {
+        const basePath = typeof window !== 'undefined' && window.location.pathname.includes('/transactions')
+            ? `/c/${company.slug}/admin/transactions`
+            : `/c/${company.slug}/admin/ledger`;
+
         router.get(
-            `/c/${company.slug}/admin/ledger`,
+            basePath,
             {
                 type: type !== 'ALL' ? type : undefined,
                 search: search || undefined,
+                manager_id: managerId || undefined,
+                start_date: sDate || undefined,
+                end_date: eDate || undefined,
             },
             {
                 preserveState: true,
                 preserveScroll: true,
             }
         );
+    };
+
+    const handleReset = () => {
+        setSelectedType('ALL');
+        setSearchTerm('');
+        setSelectedManager('');
+        setStartDate('');
+        setEndDate('');
+        const basePath = typeof window !== 'undefined' && window.location.pathname.includes('/transactions')
+            ? `/c/${company.slug}/admin/transactions`
+            : `/c/${company.slug}/admin/ledger`;
+        router.get(basePath);
     };
 
     const getTypeBadge = (type: string) => {
@@ -102,15 +155,24 @@ export default function LedgerIndex({ auth, company, transactions, statistics, f
 
     return (
         <CompanyAdminLayout>
-            <Head title={`Treasury & Ledger - ${company.name}`} />
+            <Head title={`Treasury & Money Flows - ${company.name}`} />
 
             <div className="space-y-6">
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div>
-                        <h1 className="text-2xl font-bold text-white tracking-tight">Treasury & Financial Ledger</h1>
+                        <div className="flex items-center gap-2">
+                            <h1 className="text-2xl font-bold text-white tracking-tight">Transactions & Money Flows Monitor</h1>
+                            {is_game_manager && (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                    Manager Scoped
+                                </span>
+                            )}
+                        </div>
                         <p className="text-sm text-neutral-400 mt-1">
-                            Double-entry audit log of all balance transactions, entry fees, and prize distributions.
+                            {is_game_manager
+                                ? 'Real-time double-entry audit of all cash and digital money flows for games and counter operations handled by you.'
+                                : 'Live double-entry audit of all cash and digital money flows: room entry fees, walk-in customer cash, player deposits, and prize payouts across all managers.'}
                         </p>
                     </div>
                     <div className="flex items-center space-x-2">
@@ -120,75 +182,153 @@ export default function LedgerIndex({ auth, company, transactions, statistics, f
                     </div>
                 </div>
 
+                {/* Game Manager Isolation Banner */}
+                {is_game_manager && (
+                    <div className="bg-indigo-950/40 border border-indigo-800/60 rounded-xl p-3.5 flex items-center gap-3 text-xs text-indigo-200">
+                        <span className="text-lg">🔒</span>
+                        <span>
+                            <strong>Personal Operations View:</strong> You are viewing transactions strictly belonging to games you started or player counter transactions you processed.
+                        </span>
+                    </div>
+                )}
+
                 {/* Treasury Statistics Grid */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-sm">
-                        <div className="text-xs font-medium text-neutral-400 uppercase tracking-wider">Entry Fees Inflow</div>
-                        <div className="text-xl font-bold text-blue-400 mt-1">{statistics.formatted_entry_fees}</div>
-                        <div className="text-xs text-neutral-500 mt-1">Collected from room joins</div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 shadow-sm">
+                        <div className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Entry Fees</div>
+                        <div className="text-lg font-bold text-blue-400 mt-0.5">{statistics.formatted_entry_fees}</div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5">Online & walk-ins</div>
                     </div>
 
-                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-sm">
-                        <div className="text-xs font-medium text-neutral-400 uppercase tracking-wider">Prizes Distributed</div>
-                        <div className="text-xl font-bold text-amber-400 mt-1">{statistics.formatted_prizes}</div>
-                        <div className="text-xs text-neutral-500 mt-1">Credited to verified winners</div>
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 shadow-sm">
+                        <div className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Prizes Paid</div>
+                        <div className="text-lg font-bold text-amber-400 mt-0.5">{statistics.formatted_prizes}</div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5">Distributed to winners</div>
                     </div>
 
-                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-sm">
-                        <div className="text-xs font-medium text-neutral-400 uppercase tracking-wider">Refunds Issued</div>
-                        <div className="text-xl font-bold text-purple-400 mt-1">{statistics.formatted_refunds}</div>
-                        <div className="text-xs text-neutral-500 mt-1">Cancelled rooms & returns</div>
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 shadow-sm">
+                        <div className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Cash Deposits</div>
+                        <div className="text-lg font-bold text-emerald-400 mt-0.5">{statistics.formatted_deposits}</div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5">Counter & online deposits</div>
                     </div>
 
-                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-sm">
-                        <div className="text-xs font-medium text-neutral-400 uppercase tracking-wider">Net House Revenue</div>
-                        <div className={`text-xl font-bold mt-1 ${statistics.net_house_earnings >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {statistics.formatted_net_house_earnings}
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 shadow-sm">
+                        <div className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Cash Withdrawals</div>
+                        <div className="text-lg font-bold text-rose-400 mt-0.5">{statistics.formatted_withdrawals}</div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5">Disbursed to players</div>
+                    </div>
+
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 shadow-sm">
+                        <div className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Walk-in Net Cash</div>
+                        <div className={`text-lg font-bold mt-0.5 ${(statistics.walkin_net_cash ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {statistics.formatted_walkin_net_cash ?? '$0.00'}
                         </div>
-                        <div className="text-xs text-neutral-500 mt-1">Fees minus prizes & refunds</div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5">Sales minus walk-in prizes</div>
+                    </div>
+
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 shadow-sm">
+                        <div className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Net Cash Flow</div>
+                        <div className={`text-lg font-bold mt-0.5 ${(statistics.period_net_cash ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {statistics.formatted_period_net_cash ?? '$0.00'}
+                        </div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5">Inflow minus outflow</div>
                     </div>
                 </div>
 
                 {/* Filter and Search Bar */}
-                <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-3">
                     <div className="flex flex-wrap items-center gap-3">
-                        <span className="text-xs font-semibold text-neutral-400 uppercase">Type:</span>
-                        <select
-                            value={selectedType}
-                            onChange={(e) => {
-                                setSelectedType(e.target.value);
-                                handleFilterChange(e.target.value, searchTerm);
-                            }}
-                            className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                            <option value="ALL">All Types</option>
-                            <option value="ENTRY_FEE">Entry Fees</option>
-                            <option value="PRIZE">Prizes</option>
-                            <option value="REFUND">Refunds</option>
-                            <option value="DEPOSIT">Deposits</option>
-                            <option value="WITHDRAWAL">Withdrawals</option>
-                            <option value="ADJUSTMENT">Adjustments</option>
-                        </select>
-                    </div>
+                        {/* Type Selector */}
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold text-neutral-400 uppercase">Type:</span>
+                            <select
+                                value={selectedType}
+                                onChange={(e) => {
+                                    setSelectedType(e.target.value);
+                                    handleFilterChange(e.target.value, searchTerm, selectedManager, startDate, endDate);
+                                }}
+                                className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2 focus:ring-indigo-500 focus:border-indigo-500"
+                            >
+                                <option value="ALL">All Types</option>
+                                <option value="ENTRY_FEE">Entry Fees</option>
+                                <option value="PRIZE">Prizes</option>
+                                <option value="REFUND">Refunds</option>
+                                <option value="DEPOSIT">Deposits</option>
+                                <option value="WITHDRAWAL">Withdrawals</option>
+                                <option value="ADJUSTMENT">Adjustments</option>
+                            </select>
+                        </div>
 
-                    <div className="flex items-center space-x-2">
-                        <input
-                            type="text"
-                            placeholder="Search user, ref code, or description..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    handleFilterChange(selectedType, searchTerm);
-                                }
-                            }}
-                            className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2 w-72 focus:ring-indigo-500 focus:border-indigo-500"
-                        />
+                        {/* Manager Selector (Company Admin only) */}
+                        {!is_game_manager && managers.length > 0 && (
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-semibold text-neutral-400 uppercase">Manager:</span>
+                                <select
+                                    value={selectedManager}
+                                    onChange={(e) => {
+                                        setSelectedManager(e.target.value);
+                                        handleFilterChange(selectedType, searchTerm, e.target.value, startDate, endDate);
+                                    }}
+                                    className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                >
+                                    <option value="">All Managers</option>
+                                    {managers.map((m) => (
+                                        <option key={m.id} value={m.id}>
+                                            {m.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* Date Range Selectors */}
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold text-neutral-400 uppercase">From:</span>
+                            <input
+                                type="date"
+                                value={startDate}
+                                onChange={(e) => setStartDate(e.target.value)}
+                                className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-2.5 py-1.5 focus:ring-indigo-500 focus:border-indigo-500"
+                            />
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold text-neutral-400 uppercase">To:</span>
+                            <input
+                                type="date"
+                                value={endDate}
+                                onChange={(e) => setEndDate(e.target.value)}
+                                className="bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-2.5 py-1.5 focus:ring-indigo-500 focus:border-indigo-500"
+                            />
+                        </div>
+
+                        {/* Search Input */}
+                        <div className="flex-1 min-w-[200px]">
+                            <input
+                                type="text"
+                                placeholder="Search user, ref code, or description..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        handleFilterChange(selectedType, searchTerm, selectedManager, startDate, endDate);
+                                    }
+                                }}
+                                className="w-full bg-neutral-950 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-3 py-2 focus:ring-indigo-500 focus:border-indigo-500"
+                            />
+                        </div>
+
+                        {/* Filter & Reset Buttons */}
                         <button
-                            onClick={() => handleFilterChange(selectedType, searchTerm)}
+                            onClick={() => handleFilterChange(selectedType, searchTerm, selectedManager, startDate, endDate)}
                             className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
                         >
                             Filter
+                        </button>
+                        <button
+                            onClick={handleReset}
+                            className="bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold px-3 py-2 rounded-lg transition"
+                        >
+                            Reset
                         </button>
                     </div>
                 </div>
@@ -202,6 +342,7 @@ export default function LedgerIndex({ auth, company, transactions, statistics, f
                                     <th className="px-4 py-3">Tx Ref</th>
                                     <th className="px-4 py-3">Timestamp</th>
                                     <th className="px-4 py-3">Player / Account</th>
+                                    {!is_game_manager && <th className="px-4 py-3">Host Manager</th>}
                                     <th className="px-4 py-3">Type</th>
                                     <th className="px-4 py-3">Amount</th>
                                     <th className="px-4 py-3">Wallet Delta</th>
@@ -212,7 +353,7 @@ export default function LedgerIndex({ auth, company, transactions, statistics, f
                             <tbody className="divide-y divide-neutral-800">
                                 {transactions.data.length === 0 ? (
                                     <tr>
-                                        <td colSpan={8} className="px-4 py-8 text-center text-neutral-500">
+                                        <td colSpan={is_game_manager ? 8 : 9} className="px-4 py-8 text-center text-neutral-500">
                                             No transactions match the selected criteria.
                                         </td>
                                     </tr>
@@ -231,10 +372,28 @@ export default function LedgerIndex({ auth, company, transactions, statistics, f
                                                         <div className="font-medium text-neutral-200">{tx.user.name}</div>
                                                         <div className="text-xs text-neutral-500">{tx.user.email}</div>
                                                     </div>
+                                                ) : tx.is_walkin || tx.reference_code?.startsWith('WALKIN') || tx.reference_code?.startsWith('PRIZE-WALKIN') || tx.description?.toLowerCase().includes('walk-in') ? (
+                                                    <div>
+                                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                                                            Walk-in Guest (Cash)
+                                                        </span>
+                                                        <div className="text-[11px] text-neutral-500 mt-0.5">Counter Purchase</div>
+                                                    </div>
                                                 ) : (
-                                                    <span className="text-neutral-500 italic">System</span>
+                                                    <span className="text-neutral-500 italic">System / Treasury</span>
                                                 )}
                                             </td>
+                                            {!is_game_manager && (
+                                                <td className="px-4 py-3 whitespace-nowrap text-xs">
+                                                    {tx.game_manager ? (
+                                                        <span className="text-indigo-300 font-medium">
+                                                            {tx.game_manager.name}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-neutral-500">Direct / Company</span>
+                                                    )}
+                                                </td>
+                                            )}
                                             <td className="px-4 py-3 whitespace-nowrap">
                                                 <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-semibold border ${getTypeBadge(tx.type)}`}>
                                                     {tx.type}

@@ -9,6 +9,7 @@ use App\Domains\Financial\Models\Transaction;
 use App\Domains\Financial\Services\LedgerService;
 use App\Domains\Games\Models\GamePlayer;
 use App\Domains\Tenancy\Models\Company;
+use App\Domains\Tenancy\Models\GameManagerPlayer;
 use App\Domains\Winners\Models\GameWinner;
 use App\Http\Controllers\Controller;
 use App\Models\User;
@@ -30,43 +31,98 @@ class PlayerManagementController extends Controller
      */
     public function index(Request $request, Company $company): Response
     {
+        $user = $request->user();
+        $isGameManagerOnly = $user->isGameManager() && ! $user->isCompanyAdmin() && ! $user->isPlatformOwner();
         $search = $request->query('search');
         $status = $request->query('status');
 
-        $query = User::where('company_id', $company->id)
-            ->whereHas('roles', fn ($q) => $q->where('slug', Role::PLAYER))
-            ->withCount(['transactions'])
-            ->latest('id');
+        if ($isGameManagerOnly) {
+            // Game Manager view: only players on their roster
+            $gmpQuery = GameManagerPlayer::with('player')
+                ->where('company_id', $company->id)
+                ->where('game_manager_id', $user->id)
+                ->latest('id');
 
-        if ($search) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%");
+            if ($search) {
+                $gmpQuery->whereHas('player', function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                        ->orWhere('email', 'like', "%{$search}%");
+                });
+            }
+
+            if ($status && in_array($status, ['active', 'suspended'], true)) {
+                $gmpQuery->whereHas('player', fn ($q) => $q->where('status', $status));
+            }
+
+            $players = $gmpQuery->paginate(15)->withQueryString()->through(function (GameManagerPlayer $gmp) use ($company, $user) {
+                $player = $gmp->player;
+                $winCount = GameWinner::where('company_id', $company->id)
+                    ->where('user_id', $player->id)
+                    ->whereHas('game', fn ($g) => $g->where('created_by', $user->id))
+                    ->count();
+                $gamesCount = GamePlayer::whereHas('game', fn ($g) => $g->where('company_id', $company->id)->where('created_by', $user->id))
+                    ->where('user_id', $player->id)
+                    ->count();
+
+                return [
+                    'id' => $player->id,
+                    'name' => $player->name,
+                    'email' => $player->email,
+                    'status' => $player->status ?? 'active',
+                    'balance' => $gmp->balance,
+                    'formatted_balance' => $gmp->formattedBalance(),
+                    'win_count' => $winCount,
+                    'games_count' => $gamesCount,
+                    'created_at' => $gmp->created_at->format('M d, Y'),
+                ];
             });
+
+            // List of company players not yet in this manager's roster
+            $existingIds = GameManagerPlayer::where('game_manager_id', $user->id)->pluck('player_id');
+            $availablePlayers = User::where('company_id', $company->id)
+                ->whereHas('roles', fn ($q) => $q->where('slug', Role::PLAYER))
+                ->whereNotIn('id', $existingIds)
+                ->orderBy('name')
+                ->get(['id', 'name', 'email']);
+        } else {
+            // Admin view: all company players
+            $query = User::where('company_id', $company->id)
+                ->whereHas('roles', fn ($q) => $q->where('slug', Role::PLAYER))
+                ->withCount(['transactions'])
+                ->latest('id');
+
+            if ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                        ->orWhere('email', 'like', "%{$search}%");
+                });
+            }
+
+            if ($status && in_array($status, ['active', 'suspended'], true)) {
+                $query->where('status', $status);
+            }
+
+            $players = $query->paginate(15)->withQueryString()->through(function (User $user) use ($company) {
+                $winCount = GameWinner::where('company_id', $company->id)->where('user_id', $user->id)->count();
+                $gamesCount = GamePlayer::whereHas('game', fn ($g) => $g->where('company_id', $company->id))
+                    ->where('user_id', $user->id)
+                    ->count();
+
+                return [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'status' => $user->status ?? 'active',
+                    'balance' => $user->balance,
+                    'formatted_balance' => $user->formattedBalance(),
+                    'win_count' => $winCount,
+                    'games_count' => $gamesCount,
+                    'created_at' => $user->created_at->format('M d, Y'),
+                ];
+            });
+
+            $availablePlayers = [];
         }
-
-        if ($status && in_array($status, ['active', 'suspended'], true)) {
-            $query->where('status', $status);
-        }
-
-        $players = $query->paginate(15)->withQueryString()->through(function (User $user) use ($company) {
-            $winCount = GameWinner::where('company_id', $company->id)->where('user_id', $user->id)->count();
-            $gamesCount = GamePlayer::whereHas('game', fn ($g) => $g->where('company_id', $company->id))
-                ->where('user_id', $user->id)
-                ->count();
-
-            return [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'status' => $user->status ?? 'active',
-                'balance' => $user->balance,
-                'formatted_balance' => $user->formattedBalance(),
-                'win_count' => $winCount,
-                'games_count' => $gamesCount,
-                'created_at' => $user->created_at->format('M d, Y'),
-            ];
-        });
 
         return Inertia::render('Company/Players/Index', [
             'company' => [
@@ -75,6 +131,8 @@ class PlayerManagementController extends Controller
                 'slug' => $company->slug,
             ],
             'players' => $players,
+            'available_players' => $availablePlayers,
+            'is_game_manager_view' => $isGameManagerOnly,
             'filters' => [
                 'search' => $search ?? '',
                 'status' => $status ?? 'all',
@@ -167,10 +225,15 @@ class PlayerManagementController extends Controller
     /**
      * Suspend or activate a player account.
      */
-    public function toggleStatus(Company $company, User $player): RedirectResponse
+    public function toggleStatus(Request $request, Company $company, User $player): RedirectResponse
     {
         if ((int) $player->company_id !== (int) $company->id) {
             abort(404);
+        }
+
+        $user = $request->user();
+        if ($user && $user->isGameManager() && ! $user->isCompanyAdmin() && ! $user->isPlatformOwner()) {
+            abort(403, 'Unauthorized. Game managers cannot suspend or activate players. Only administrators can perform this action.');
         }
 
         $newStatus = ($player->status ?? 'active') === 'active' ? 'suspended' : 'active';
@@ -255,6 +318,18 @@ class PlayerManagementController extends Controller
         );
         $player->roles()->sync([$playerRole->id]);
 
+        $user = $request->user();
+        $managerId = $user->isGameManager() ? $user->id : null;
+
+        if ($managerId !== null) {
+            GameManagerPlayer::create([
+                'company_id' => $company->id,
+                'game_manager_id' => $managerId,
+                'player_id' => $player->id,
+                'balance' => 0,
+            ]);
+        }
+
         $initialDeposit = (float) ($validated['initial_deposit'] ?? 0);
         if ($initialDeposit > 0) {
             $amountInCents = (int) round($initialDeposit * 100);
@@ -262,7 +337,8 @@ class PlayerManagementController extends Controller
                 $player,
                 $amountInCents,
                 referenceCode: 'INIT-'.bin2hex(random_bytes(4)),
-                description: 'Initial deposit upon counter registration'
+                description: 'Initial deposit upon counter registration',
+                managerId: $managerId
             );
         }
 
@@ -272,12 +348,118 @@ class PlayerManagementController extends Controller
             "Operator registered new player {$player->name} ({$player->email}) with temporary password.",
             [
                 'player_id' => $player->id,
+                'manager_id' => $managerId,
                 'initial_deposit' => $initialDeposit,
                 'must_reset_password' => true,
             ]
         );
 
         return back()->with('success', "Player {$player->name} successfully registered. They will be prompted to set a new password upon first login.");
+    }
+
+    /**
+     * Authorize an existing company player on the current Game Manager's roster.
+     */
+    public function authorizeExisting(Request $request, Company $company): RedirectResponse
+    {
+        $validated = $request->validate([
+            'player_id' => ['required', 'exists:users,id'],
+            'initial_deposit' => ['nullable', 'numeric', 'min:0', 'max:50000'],
+        ]);
+
+        /** @var User $player */
+        $player = User::where('id', $validated['player_id'])
+            ->where('company_id', $company->id)
+            ->firstOrFail();
+
+        $user = $request->user();
+        $managerId = $user->id;
+
+        $existing = GameManagerPlayer::where('game_manager_id', $managerId)
+            ->where('player_id', $player->id)
+            ->first();
+
+        if ($existing) {
+            return back()->with('error', "Player {$player->name} is already authorized on your roster.");
+        }
+
+        GameManagerPlayer::create([
+            'company_id' => $company->id,
+            'game_manager_id' => $managerId,
+            'player_id' => $player->id,
+            'balance' => 0,
+        ]);
+
+        $initialDeposit = (float) ($validated['initial_deposit'] ?? 0);
+        if ($initialDeposit > 0) {
+            $amountInCents = (int) round($initialDeposit * 100);
+            $this->ledgerService->recordDeposit(
+                $player,
+                $amountInCents,
+                referenceCode: 'MGR-AUTH-'.bin2hex(random_bytes(4)),
+                description: "Initial deposit upon authorization by {$user->name}",
+                managerId: $managerId
+            );
+        }
+
+        $this->auditLogger->log(
+            AuditLog::ACTION_PLAYER_ACTIVATED,
+            $player,
+            "Operator {$user->name} authorized player {$player->name} to participate in their games.",
+            [
+                'player_id' => $player->id,
+                'manager_id' => $managerId,
+                'initial_deposit' => $initialDeposit,
+            ]
+        );
+
+        return back()->with('success', "Player {$player->name} successfully added to your game roster.");
+    }
+
+    /**
+     * Process a counter cash withdrawal for a player.
+     */
+    public function withdraw(Request $request, Company $company, User $player): RedirectResponse
+    {
+        if ((int) $player->company_id !== (int) $company->id) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'amount' => ['required', 'numeric', 'min:1', 'max:50000'],
+            'notes' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $amountInCents = (int) round(((float) $validated['amount']) * 100);
+        $user = $request->user();
+        $managerId = $user->isGameManager() ? $user->id : null;
+        $reason = $validated['notes'] ?? 'Counter cash withdrawal';
+
+        try {
+            $tx = $this->ledgerService->recordWithdrawal(
+                $player,
+                $amountInCents,
+                referenceCode: 'WTH-'.bin2hex(random_bytes(5)),
+                description: "Counter cash withdrawal via {$user->name}: {$reason}",
+                managerId: $managerId
+            );
+        } catch (\DomainException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        $this->auditLogger->log(
+            AuditLog::ACTION_BALANCE_ADJUSTED,
+            $tx,
+            "Operator {$user->name} processed withdrawal of \${$validated['amount']}.00 for {$player->name}.",
+            [
+                'player_id' => $player->id,
+                'manager_id' => $managerId,
+                'amount' => $amountInCents,
+                'reason' => $reason,
+            ]
+        );
+
+        return back()->with('success', "Successfully processed withdrawal of \${$validated['amount']}.00 for {$player->name}.");
     }
 
     /**

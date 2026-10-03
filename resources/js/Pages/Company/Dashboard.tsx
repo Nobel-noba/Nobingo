@@ -49,6 +49,8 @@ interface Props extends PageProps {
         total_net_house: number;
         formatted_net_house: string;
         pending_player_deposits_count: number;
+        has_low_credit?: boolean;
+        is_game_manager_view?: boolean;
     };
     recent_games?: RecentGame[];
     recent_winners?: RecentWinner[];
@@ -58,7 +60,7 @@ export default function CompanyDashboard({ stats, recent_games = [], recent_winn
     const { tenant } = usePage<PageProps>().props;
     const companySlug = tenant?.slug || '';
 
-    const hasLowCredit = stats.credit_balance <= 0;
+    const hasLowCredit = Boolean(stats.has_low_credit);
 
     return (
         <CompanyAdminLayout
@@ -71,12 +73,14 @@ export default function CompanyDashboard({ stats, recent_games = [], recent_winn
                         </p>
                     </div>
                     <div className="flex items-center gap-3">
-                        <Link
-                            href={`/c/${companySlug}/admin/credits`}
-                            className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center gap-1.5 transition shadow-sm"
-                        >
-                            <span>💳</span> Platform Credits: {stats.formatted_credit_balance}
-                        </Link>
+                        {!stats.is_game_manager_view && (
+                            <Link
+                                href={`/c/${companySlug}/admin/credits`}
+                                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center gap-1.5 transition shadow-sm"
+                            >
+                                <span>💳</span> Platform Credits: {stats.formatted_credit_balance}
+                            </Link>
+                        )}
                         <Link
                             href={`/c/${companySlug}/admin/games`}
                             className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition shadow-sm"
